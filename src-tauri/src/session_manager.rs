@@ -53,6 +53,7 @@ pub struct CreateSessionParams<'a> {
     pub worktree_path: Option<&'a str>,
     pub base_commit: Option<&'a str>,
     pub prompt: Option<&'a str>,
+    pub task_id: Option<i64>,
 }
 
 impl SessionManager {
@@ -138,9 +139,17 @@ impl SessionManager {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // Use worktree_path as PTY working directory if set, otherwise use working_dir.
+        // If task_id is set, look up the task's worktree_path and use it for both
+        // the PTY cwd and the session's denormalized worktree_path. This keeps task
+        // as source of truth for worktree lifecycle while preserving existing
+        // session-level worktree reads (WorktreeIcon, git polling).
+        let (task_worktree_path, task_base_commit) = self.resolve_task_worktree(params.task_id);
+
+        // Use (in priority): task worktree → explicit params.worktree_path → working_dir.
         // working_dir is always the project root (for project grouping in DB).
-        let pty_cwd = params.worktree_path.unwrap_or(params.working_dir);
+        let effective_worktree_path = task_worktree_path.as_deref().or(params.worktree_path);
+        let effective_base_commit = task_base_commit.as_deref().or(params.base_commit);
+        let pty_cwd = effective_worktree_path.unwrap_or(params.working_dir);
         let pty_id = self.pty.create_session(
             params.command,
             &args,
@@ -174,9 +183,10 @@ impl SessionManager {
                 command: params.command,
                 args: &args_json,
                 agent_session_id: stored_session_id.as_deref(),
-                worktree_path: params.worktree_path,
-                base_commit: params.base_commit,
+                worktree_path: effective_worktree_path,
+                base_commit: effective_base_commit,
                 initial_prompt: params.prompt,
+                task_id: params.task_id,
             })
             .map_err(|e| AppError::Db(e.to_string()))?;
 
@@ -236,5 +246,85 @@ impl SessionManager {
         self.db
             .list_sessions_by_project_path(project_path)
             .map_err(|e| AppError::Db(e.to_string()))
+    }
+
+    /// Resolve a task's worktree path and base commit by id. Returns
+    /// (None, None) when task_id is None or the task row is missing.
+    /// Extracted so it can be exercised without spawning a PTY.
+    pub(crate) fn resolve_task_worktree(
+        &self,
+        task_id: Option<i64>,
+    ) -> (Option<String>, Option<String>) {
+        let Some(tid) = task_id else { return (None, None); };
+        match self.db.get_task_by_id(tid) {
+            Ok(Some(task)) => (task.worktree_path, task.base_commit),
+            _ => (None, None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod task_worktree_resolution_tests {
+    use super::*;
+    use crate::db::Db;
+    use std::sync::Arc;
+
+    fn fresh_db() -> Arc<Db> {
+        // :memory: instances isolate each test.
+        Arc::new(Db::open_in_memory().expect("open in-memory db"))
+    }
+
+    fn make_mgr() -> SessionManager {
+        SessionManager::new(fresh_db())
+    }
+
+    #[test]
+    fn returns_none_when_task_id_is_none() {
+        let mgr = make_mgr();
+        let (wt, bc) = mgr.resolve_task_worktree(None);
+        assert!(wt.is_none());
+        assert!(bc.is_none());
+    }
+
+    #[test]
+    fn returns_none_when_task_id_missing_in_db() {
+        let mgr = make_mgr();
+        let (wt, bc) = mgr.resolve_task_worktree(Some(9999));
+        assert!(wt.is_none());
+        assert!(bc.is_none());
+    }
+
+    #[test]
+    fn returns_task_worktree_path_and_base_commit() {
+        let mgr = make_mgr();
+        let project_id = mgr.db.insert_project("p", "/tmp/p").unwrap();
+        let task_id = mgr
+            .db
+            .insert_task(
+                project_id,
+                "t1",
+                Some("feat/x"),
+                Some("/tmp/p/.sessonix-worktrees/feat-x"),
+                Some("abc123"),
+            )
+            .unwrap();
+
+        let (wt, bc) = mgr.resolve_task_worktree(Some(task_id));
+        assert_eq!(wt.as_deref(), Some("/tmp/p/.sessonix-worktrees/feat-x"));
+        assert_eq!(bc.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn returns_none_fields_when_task_has_no_worktree() {
+        let mgr = make_mgr();
+        let project_id = mgr.db.insert_project("p", "/tmp/p").unwrap();
+        let task_id = mgr
+            .db
+            .insert_task(project_id, "t1", None, None, None)
+            .unwrap();
+
+        let (wt, bc) = mgr.resolve_task_worktree(Some(task_id));
+        assert!(wt.is_none());
+        assert!(bc.is_none());
     }
 }

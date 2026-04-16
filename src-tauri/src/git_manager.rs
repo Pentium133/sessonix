@@ -73,12 +73,33 @@ pub struct WorktreeInfo {
 
 /// Sanitize a branch name: allow alphanumeric, dashes, underscores, slashes, dots.
 /// For filesystem paths (worktree dirs), slashes create subdirectories which is fine.
+/// Dots are allowed (git permits them in ref names) but `..` path components are
+/// rejected by the caller to prevent worktree path traversal.
 fn sanitize_branch(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '/' | '.') { c } else { '-' })
         .collect::<String>()
         .trim_matches(|c: char| c == '-' || c == '/')
         .to_string()
+}
+
+/// Reject branch names that would escape the `.sessonix-worktrees/` directory
+/// when converted to a path. Covers `..`, `.`, leading/trailing dots per component.
+fn is_safe_worktree_name(sanitized: &str) -> bool {
+    if sanitized.is_empty() {
+        return false;
+    }
+    // Any path component that is "." or ".." is unsafe.
+    for component in sanitized.split('/') {
+        if component == "." || component == ".." || component.is_empty() {
+            return false;
+        }
+    }
+    // After converting `/` to `-`, still shouldn't have `..`
+    if sanitized.replace('/', "-").contains("..") {
+        return false;
+    }
+    true
 }
 
 /// Create a git worktree for a new branch based on HEAD.
@@ -97,6 +118,9 @@ pub fn create_worktree(working_dir: &str, branch_name: &str) -> Result<WorktreeI
     let sanitized = sanitize_branch(branch_name);
     if sanitized.is_empty() {
         return Err(format!("Branch name '{}' produces an empty sanitized name", branch_name));
+    }
+    if !is_safe_worktree_name(&sanitized) {
+        return Err(format!("Branch name '{}' contains unsafe path components (. or ..)", branch_name));
     }
     let mut final_branch = sanitized.clone();
     let mut suffix = 2;
@@ -344,6 +368,35 @@ mod tests {
 
         remove_worktree(&info1.path).unwrap();
         remove_worktree(&info2.path).unwrap();
+    }
+
+    #[test]
+    fn test_reject_path_traversal_in_branch_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        // Plain `..` — should be rejected before any filesystem op.
+        assert!(create_worktree(path, "..").is_err());
+        // Path components with `..`
+        assert!(create_worktree(path, "foo/../bar").is_err());
+        assert!(create_worktree(path, "../escape").is_err());
+        // Single `.` — also rejected (would be current dir)
+        assert!(create_worktree(path, ".").is_err());
+        // Embedded `..` after slash-to-dash conversion
+        assert!(create_worktree(path, "a/../b").is_err());
+    }
+
+    #[test]
+    fn test_safe_dotted_branch_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        // Single dots in normal places are fine (git allows dots in refs).
+        let info = create_worktree(path, "feature/1.2.3").unwrap();
+        assert!(!info.branch.is_empty());
+        remove_worktree(&info.path).unwrap();
     }
 
     #[test]

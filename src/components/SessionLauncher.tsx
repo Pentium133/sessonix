@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AgentType } from "../lib/types";
 import { useSettingsStore } from "../store/settingsStore";
+import { useTaskStore } from "../store/taskStore";
 import { getGitStatus, createWorktree } from "../lib/git";
+import { slugify } from "../lib/slugify";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
@@ -78,6 +80,7 @@ interface NewSessionProps {
   onClose: () => void;
   projectPath: string;
   prefill?: LauncherPrefill;
+  taskId?: number;
   onLaunch: (params: {
     command: string;
     args: string[];
@@ -87,6 +90,7 @@ interface NewSessionProps {
     worktree_path?: string;
     base_commit?: string;
     prompt?: string;
+    task_id?: number;
   }) => void;
 }
 
@@ -114,6 +118,10 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const skipPermsAutoSet = useRef(false);
 
   const prefill = props.mode === "session" ? props.prefill : undefined;
+  const taskId = props.mode === "session" ? props.taskId : undefined;
+  const tasks = useTaskStore((s) => s.tasks);
+  const launchingInTask = taskId != null ? tasks.find((t) => t.id === taskId) : undefined;
+  const hideWorktreeSection = launchingInTask != null;
 
   // Reset state when opening
   useEffect(() => {
@@ -212,7 +220,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
     let baseCommit: string | undefined;
 
     if (useWorktree && isGitRepo) {
-      const branch = worktreeBranch.trim() || `sessonix/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+      const branch = worktreeBranch.trim() || `sessonix/${slugify(name) || "session"}`;
       setWorktreeCreating(true);
       try {
         const info = await createWorktree(props.projectPath, branch);
@@ -236,6 +244,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       worktree_path: worktreePath,
       base_commit: baseCommit,
       prompt: trimmedPrompt || undefined,
+      task_id: taskId,
     });
     launchingRef.current = false;
     onClose();
@@ -253,6 +262,16 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           New Session
           <span className="launcher-project-badge">{projectName}</span>
         </div>
+
+        {launchingInTask && (
+          <div className="launcher-task-badge">
+            <WorktreeIcon className="session-wt-icon" />
+            <span>In task: <strong>{launchingInTask.name}</strong></span>
+            {launchingInTask.branch && (
+              <span className="launcher-task-branch">{launchingInTask.branch}</span>
+            )}
+          </div>
+        )}
 
         {/* Agent pills */}
         <div className="launcher-label">Agent</div>
@@ -405,8 +424,8 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}
         />
 
-        {/* Worktree isolation */}
-        {isGitRepo && (
+        {/* Worktree isolation — hidden when launching inside an existing task */}
+        {isGitRepo && !hideWorktreeSection && (
           <div className="launcher-worktree-section">
             <label className="launcher-checkbox-label">
               <input
@@ -421,7 +440,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
               <>
                 <input
                   className="launcher-input"
-                  placeholder={`Branch name (default: sessonix/${(taskName.trim() || "session").toLowerCase().replace(/[^a-z0-9]+/g, "-")})`}
+                  placeholder={`Branch name (default: sessonix/${slugify(taskName) || "session"})`}
                   value={worktreeBranch}
                   onChange={(e) => setWorktreeBranch(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}

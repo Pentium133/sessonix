@@ -18,6 +18,7 @@ import { useStatusPolling } from "./hooks/useStatusPolling";
 import type { AgentType } from "./lib/types";
 import { useSessionStore } from "./store/sessionStore";
 import { useProjectStore } from "./store/projectStore";
+import { useTaskStore } from "./store/taskStore";
 import { useUiStore } from "./store/uiStore";
 import { SIDEBAR_MIN, SIDEBAR_MAX } from "./lib/constants";
 import { getSetting, checkForUpdate } from "./lib/api";
@@ -41,10 +42,18 @@ function App() {
   const closeLauncher = useUiStore((s) => s.closeLauncher);
   const launcher = useUiStore((s) => s.launcher);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const activeProjectPath = useProjectStore((s) => s.activeProjectPath);
   const activeProjectName = useProjectStore((s) => {
     const p = s.projects.find((p) => p.path === s.activeProjectPath);
     return p?.name ?? null;
   });
+
+  // Load task groups whenever the active project changes.
+  useEffect(() => {
+    if (activeProjectPath) {
+      useTaskStore.getState().load(activeProjectPath);
+    }
+  }, [activeProjectPath]);
 
   // Update window title with version and active project
   useEffect(() => {
@@ -325,6 +334,7 @@ function App() {
       worktree_path?: string;
       base_commit?: string;
       prompt?: string;
+      task_id?: number;
     }) => {
       try {
         await useSessionStore.getState().addSession({
@@ -336,6 +346,7 @@ function App() {
           worktree_path: params.worktree_path,
           base_commit: params.base_commit,
           prompt: params.prompt,
+          task_id: params.task_id,
         });
       } catch (err) {
         showToast(String(err), "error");
@@ -421,6 +432,7 @@ function App() {
           onClose={closeLauncher}
           projectPath={launcher.projectPath}
           prefill={launcher.prefill}
+          taskId={launcher.taskId}
           onLaunch={handleLaunchSession}
         />
       )}

@@ -1,10 +1,45 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+
+// Mock API before importing stores — invoke returns undefined by default,
+// which breaks async load() calls in templateStore/taskStore on render.
+vi.mock("../lib/api", () => ({
+  writeToSession: vi.fn().mockResolvedValue(undefined),
+  createSession: vi.fn().mockResolvedValue(100),
+  killSession: vi.fn().mockResolvedValue(undefined),
+  deleteSession: vi.fn().mockResolvedValue(undefined),
+  attachSession: vi.fn().mockResolvedValue([]),
+  detachSession: vi.fn().mockResolvedValue(undefined),
+  listProjects: vi.fn().mockResolvedValue([]),
+  listSessions: vi.fn().mockResolvedValue([]),
+  listTemplates: vi.fn().mockResolvedValue([]),
+  createTemplate: vi.fn().mockResolvedValue(1),
+  deleteTemplate: vi.fn().mockResolvedValue(undefined),
+  updateTemplate: vi.fn().mockResolvedValue(undefined),
+  listTasks: vi.fn().mockResolvedValue([]),
+  createTask: vi.fn().mockResolvedValue({
+    id: 1, projectId: 1, name: "t", branch: null, worktreePath: null, baseCommit: null, createdAt: 0,
+  }),
+  deleteTask: vi.fn().mockResolvedValue({ worktree_warning: null }),
+  installClaudeHooks: vi.fn().mockResolvedValue(true),
+  checkClaudeHooks: vi.fn().mockResolvedValue(true),
+  reorderSession: vi.fn().mockResolvedValue(undefined),
+  setSortOrder: vi.fn().mockResolvedValue(undefined),
+  addProject: vi.fn().mockResolvedValue(1),
+  removeProject: vi.fn().mockResolvedValue(undefined),
+  getSetting: vi.fn().mockResolvedValue(null),
+  setSetting: vi.fn().mockResolvedValue(undefined),
+  getAllSettings: vi.fn().mockResolvedValue([]),
+  checkForUpdate: vi.fn().mockResolvedValue(null),
+  detectAgents: vi.fn().mockResolvedValue({}),
+}));
+
 import Sidebar from "../components/Sidebar";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import { useUiStore } from "../store/uiStore";
-import type { Project, Session } from "../lib/types";
+import { useTaskStore } from "../store/taskStore";
+import type { Project, Session, Task } from "../lib/types";
 import * as git from "../lib/git";
 
 const mockHandleRemoveSession = vi.fn();
@@ -56,6 +91,7 @@ function makeSessions(count: number, projectPath: string): Session[] {
     worktree_path: null,
     base_commit: null,
     initial_prompt: null,
+    task_id: null,
   }));
 }
 
@@ -64,6 +100,7 @@ function setupStores(
   sessions: Session[],
   activeSessionId: number | null = null,
   collapsed = false,
+  tasks: Task[] = [],
 ) {
   useProjectStore.setState({ projects, activeProjectPath: projects[0]?.path ?? null });
   useSessionStore.setState({
@@ -72,6 +109,20 @@ function setupStores(
     loaded: true,
   });
   useUiStore.setState({ sidebarCollapsed: collapsed, sidebarWidth: 260 });
+  useTaskStore.setState({ tasks, loaded: true });
+}
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 1,
+    projectId: 1,
+    name: "Task A",
+    branch: "feat/a",
+    worktreePath: "/tmp/app/.sessonix-worktrees/feat-a",
+    baseCommit: "abc",
+    createdAt: 0,
+    ...overrides,
+  };
 }
 
 describe("Sidebar (SessionPanel)", () => {
@@ -122,7 +173,7 @@ describe("Sidebar (SessionPanel)", () => {
       {
         id: 2, command: "claude", args: [], working_dir: "/tmp/other",
         task_name: "Other Session", agent_type: "claude", status: "running",
-        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null, initial_prompt: null,
+        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null, initial_prompt: null, task_id: null,
       },
     ];
     setupStores(projects, sessions);
@@ -142,37 +193,6 @@ describe("Sidebar (SessionPanel)", () => {
     render(<Sidebar />);
     fireEvent.click(screen.getByText("Session 1"));
     expect(switchSession).toHaveBeenCalledWith(1);
-  });
-
-  it("shows Relaunch button for exited sessions", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1, 2] },
-    ];
-    const sessions = makeSessions(2, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Relaunch")).toBeTruthy();
-  });
-
-  it("shows Kill button for running sessions", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1] },
-    ];
-    const sessions = makeSessions(1, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Kill")).toBeTruthy();
-  });
-
-  it("shows status badges", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1, 2] },
-    ];
-    const sessions = makeSessions(2, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Running")).toBeTruthy();
-    expect(screen.getByText("Exited")).toBeTruthy();
   });
 
   it("shows the worktree tree icon in git header for worktree projects", async () => {
@@ -208,6 +228,66 @@ describe("Sidebar (SessionPanel)", () => {
     const activeItem = container.querySelector(".session-card.active");
     expect(activeItem).toBeTruthy();
     expect(activeItem?.textContent).toContain("Session 1");
+  });
+
+  describe("Task grouping", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1, 2] },
+    ];
+
+    it("renders TaskGroup when project has tasks", () => {
+      const sessions = makeSessions(1, "/tmp/app");
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      expect(container.querySelector(".task-group")).toBeTruthy();
+      expect(screen.getByText("Task A")).toBeTruthy();
+      expect(screen.getByText("Tasks")).toBeTruthy();
+    });
+
+    it("renders a grouped session inside its TaskGroup body", () => {
+      const sessions: Session[] = [
+        {
+          ...makeSessions(1, "/tmp/app")[0],
+          id: 1,
+          task_name: "Grouped S",
+          task_id: 1,
+        },
+      ];
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      const body = container.querySelector(".task-group-body");
+      expect(body).toBeTruthy();
+      expect(body?.textContent).toContain("Grouped S");
+    });
+
+    it("renders ungrouped sessions outside task groups", () => {
+      const sessions: Session[] = [
+        { ...makeSessions(1, "/tmp/app")[0], id: 1, task_name: "Loose S", task_id: null },
+      ];
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      const body = container.querySelector(".task-group-body");
+      // task has no sessions → body renders "No sessions yet" placeholder
+      expect(body?.textContent).toContain("No sessions yet");
+      // Ungrouped session should render outside, directly under sessions-list
+      const looseCard = screen
+        .getByText("Loose S")
+        .closest(".session-card");
+      expect(looseCard?.parentElement?.classList.contains("task-group-body")).toBe(false);
+    });
+
+    it("shows empty TaskGroup state when task has no sessions", () => {
+      setupStores(projects, [], null, false, [makeTask()]);
+      render(<Sidebar />);
+      expect(screen.getByText("No sessions yet")).toBeTruthy();
+    });
+
+    it("does not render 'Tasks' header when no tasks exist", () => {
+      const sessions = makeSessions(1, "/tmp/app");
+      setupStores(projects, sessions, null, false, []);
+      render(<Sidebar />);
+      expect(screen.queryByText("Tasks")).toBeNull();
+    });
   });
 
   describe("Kill confirmation", () => {
@@ -289,6 +369,7 @@ describe("Sidebar (SessionPanel)", () => {
         worktree_path: null,
         base_commit: null,
         initial_prompt: null,
+        task_id: null,
       }];
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);

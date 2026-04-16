@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { Project } from "../lib/types";
 import {
   addProject as apiAddProject,
@@ -31,7 +32,9 @@ interface ProjectState {
   replaceSessionInProject: (path: string, oldId: number, newId: number) => void;
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectState>()(
+  persist(
+    (set, get) => ({
   projects: [],
   activeProjectPath: null,
   lastActiveSession: {},
@@ -117,4 +120,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ),
     }));
   },
-}));
+    }),
+    {
+      name: "sessonix-projects",
+      // Projects list comes from DB via sessionStore.restore — don't persist it.
+      // Only persist user's navigation state.
+      partialize: (state) => ({
+        activeProjectPath: state.activeProjectPath,
+        lastActiveSession: state.lastActiveSession,
+      }),
+    }
+  )
+);

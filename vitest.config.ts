@@ -7,5 +7,12 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/__tests__/setup.ts"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      // Dogfooding: task worktrees inside the repo carry their own copy of src/
+      // which would be collected twice without this.
+      "**/.sessonix-worktrees/**",
+    ],
   },
 });

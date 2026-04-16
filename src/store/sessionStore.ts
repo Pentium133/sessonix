@@ -35,6 +35,7 @@ interface SessionState {
     worktree_path?: string;
     base_commit?: string;
     prompt?: string;
+    task_id?: number;
   }) => Promise<number>;
   removeSession: (id: number) => Promise<void>;
   removeSessions: (ids: number[]) => void; // bulk remove — for project removal cleanup
@@ -107,6 +108,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               worktree_path: s.worktree_path ?? null,
               base_commit: s.base_commit ?? null,
               initial_prompt: s.initial_prompt ?? null,
+              task_id: s.task_id ?? null,
             });
           }
 
@@ -117,10 +119,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
         }
 
-        // Atomic: populate both stores
+        // Atomic: populate both stores. Honor a persisted activeProjectPath
+        // (from localStorage via projectStore.persist) when it still matches
+        // an existing project — otherwise fall back to the first.
         projectStore.setProjects(projectList);
         if (dbProjects.length > 0) {
-          projectStore.setActiveProjectPath(dbProjects[0].path);
+          const persistedPath = projectStore.activeProjectPath;
+          const stillExists = persistedPath && dbProjects.some((p) => p.path === persistedPath);
+          if (!stillExists) {
+            projectStore.setActiveProjectPath(dbProjects[0].path);
+          }
         }
         set({ sessions: allSessions, loaded: true });
         return;
@@ -170,10 +178,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       worktree_path: params.worktree_path,
       base_commit: params.base_commit,
       prompt: params.prompt,
+      task_id: params.task_id,
     });
 
     if (params.replaceId != null) {
-      const replacedOrder = get().sessions.find((s) => s.id === params.replaceId)?.sortOrder ?? 0;
+      const oldSession = get().sessions.find((s) => s.id === params.replaceId);
+      const replacedOrder = oldSession?.sortOrder ?? 0;
+      // Preserve task_id from replaced session if caller didn't supply one
+      const effectiveTaskId = params.task_id ?? oldSession?.task_id ?? null;
       set((state) => {
         const session: Session = {
           id,
@@ -190,6 +202,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           worktree_path: params.worktree_path ?? null,
           base_commit: params.base_commit ?? null,
           initial_prompt: params.prompt ?? null,
+          task_id: effectiveTaskId,
         };
         return {
           sessions: state.sessions.map((s) => (s.id === params.replaceId ? session : s)),
@@ -222,6 +235,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           worktree_path: params.worktree_path ?? null,
           base_commit: params.base_commit ?? null,
           initial_prompt: params.prompt ?? null,
+          task_id: params.task_id ?? null,
         };
         return {
           sessions: [...state.sessions, session],

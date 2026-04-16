@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import SessionLauncher from "../components/SessionLauncher";
+import { useTaskStore } from "../store/taskStore";
+import type { Task } from "../lib/types";
 
 describe("SessionLauncher", () => {
   const defaultProps = {
@@ -206,5 +208,42 @@ describe("SessionLauncher", () => {
         agent_type: "codex",
       })
     );
+  });
+
+  describe("Launch inside task", () => {
+    const task: Task = {
+      id: 42,
+      projectId: 1,
+      name: "Fix auth",
+      branch: "feat/fix-auth",
+      worktreePath: "/repo/.sessonix-worktrees/feat-fix-auth",
+      baseCommit: "abc",
+      createdAt: 0,
+    };
+
+    beforeEach(() => {
+      useTaskStore.setState({ tasks: [task], loaded: true });
+    });
+
+    it("shows 'In task' badge when taskId prop resolves to a task", () => {
+      render(<SessionLauncher {...defaultProps} taskId={42} />);
+      expect(screen.getByText(/In task:/)).toBeTruthy();
+      expect(screen.getByText("Fix auth")).toBeTruthy();
+      expect(screen.getByText("feat/fix-auth")).toBeTruthy();
+    });
+
+    it("hides worktree toggle when taskId is set", () => {
+      render(<SessionLauncher {...defaultProps} taskId={42} />);
+      expect(screen.queryByText(/Run in isolated worktree/)).toBeNull();
+    });
+
+    it("passes task_id through to onLaunch", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} taskId={42} />);
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ task_id: 42 })
+      );
+    });
   });
 });

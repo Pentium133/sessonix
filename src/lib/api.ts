@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentStatus, CreateSessionRequest } from "./types";
+import type { AgentStatus, CreateSessionRequest, Task } from "./types";
 
 export async function createSession(
   request: CreateSessionRequest
@@ -101,6 +101,7 @@ export interface SessionInfo {
   worktree_path: string | null;
   base_commit: string | null;
   initial_prompt: string | null;
+  task_id: number | null;
 }
 
 export async function addProject(
@@ -218,6 +219,54 @@ export async function deleteTemplate(id: number): Promise<void> {
 
 export async function updateTemplate(id: number, name: string, initialPrompt?: string): Promise<void> {
   return invoke<void>("update_template", { id, name, initialPrompt });
+}
+
+// --- Tasks (worktree-scoped session groups) ---
+
+interface TaskInfo {
+  id: number;
+  project_id: number;
+  name: string;
+  branch: string | null;
+  worktree_path: string | null;
+  base_commit: string | null;
+  created_at: number; // Unix ms (backend converts from SQLite datetime)
+}
+
+function mapTaskInfo(info: TaskInfo): Task {
+  return {
+    id: info.id,
+    projectId: info.project_id,
+    name: info.name,
+    branch: info.branch,
+    worktreePath: info.worktree_path,
+    baseCommit: info.base_commit,
+    createdAt: info.created_at,
+  };
+}
+
+export async function createTask(request: {
+  project_path: string;
+  name: string;
+  branch_name: string;
+}): Promise<Task> {
+  const info = await invoke<TaskInfo>("create_task", { request });
+  return mapTaskInfo(info);
+}
+
+export async function listTasks(projectPath: string): Promise<Task[]> {
+  const infos = await invoke<TaskInfo[]>("list_tasks", { projectPath });
+  return infos.map(mapTaskInfo);
+}
+
+export interface DeleteTaskResult {
+  /// Non-fatal warning: DB rows removed, but worktree cleanup failed (e.g.
+  /// dirty index, permission error). Surface to user but don't treat as error.
+  worktree_warning: string | null;
+}
+
+export async function deleteTask(taskId: number): Promise<DeleteTaskResult> {
+  return invoke<DeleteTaskResult>("delete_task", { taskId });
 }
 
 // --- Updates ---

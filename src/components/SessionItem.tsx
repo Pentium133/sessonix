@@ -12,6 +12,9 @@ interface SessionItemProps {
   isActive: boolean;
   isDragOver: boolean;
   projectBranch: string | null;
+  /// When false (e.g. sessions rendered inside a TaskGroup), drag handlers
+  /// are skipped entirely to avoid misleading drag affordances.
+  draggable?: boolean;
   onSwitch: () => void;
   onRelaunch: (session: Session) => void;
   onRemove: (id: number) => void;
@@ -50,6 +53,7 @@ export default function SessionItem({
   isActive,
   isDragOver,
   projectBranch,
+  draggable = true,
   onSwitch,
   onRelaunch,
   onRemove,
@@ -90,12 +94,12 @@ export default function SessionItem({
     <div
       className={`session-card${isActive ? " active" : ""}${isDragOver ? " drag-over" : ""}`}
       onClick={onSwitch}
-      draggable
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragOver={draggable ? onDragOver : undefined}
+      onDragLeave={draggable ? onDragLeave : undefined}
+      onDrop={draggable ? onDrop : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
       style={{ "--agent-color": agentColor } as React.CSSProperties}
     >
       <div className="card-badge" />
