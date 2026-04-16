@@ -441,6 +441,11 @@ fn delete_template(state: tauri::State<'_, SessionManager>, id: i64) -> Result<(
 }
 
 #[tauri::command]
+fn update_template(state: tauri::State<'_, SessionManager>, id: i64, name: String, initial_prompt: Option<String>) -> Result<(), String> {
+    state.db.update_template(id, &name, "", initial_prompt.as_deref(), false).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_setting(state: tauri::State<'_, SessionManager>, key: String) -> Result<Option<String>, String> {
     state.db.get_setting(&key).map_err(|e| e.to_string())
 }
@@ -799,6 +804,7 @@ pub fn run() {
             create_template,
             list_templates,
             delete_template,
+            update_template,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

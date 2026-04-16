@@ -216,6 +216,10 @@ export async function deleteTemplate(id: number): Promise<void> {
   return invoke<void>("delete_template", { id });
 }
 
+export async function updateTemplate(id: number, name: string, initialPrompt?: string): Promise<void> {
+  return invoke<void>("update_template", { id, name, initialPrompt });
+}
+
 // --- Updates ---
 
 export interface UpdateInfo {

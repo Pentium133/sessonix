@@ -203,16 +203,19 @@ impl SessionManager {
             });
         }
 
-        // For shell/custom: write prompt to stdin after a delay so the shell has time to init.
-        let is_shell = matches!(params.agent_type, "shell" | "custom");
-        if is_shell {
+        // Write prompt to stdin for agents that accept it interactively.
+        // Claude/shell/custom: write after a delay so the process has time to init.
+        // Codex/Gemini: prompt passed as CLI positional arg, not stdin.
+        let needs_stdin_prompt = matches!(params.agent_type, "claude" | "shell" | "custom");
+        if needs_stdin_prompt {
             if let Some(prompt) = params.prompt {
                 let prompt = format!("{}\n", prompt);
+                let delay = if params.agent_type == "claude" { 500 } else { 2000 };
                 if let Ok(session) = self.pty.get_session(pty_id) {
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(2000));
+                        std::thread::sleep(std::time::Duration::from_millis(delay));
                         if let Err(e) = session.write_input(prompt.as_bytes()) {
-                            log::warn!("Failed to write prompt to shell stdin: {}", e);
+                            log::warn!("Failed to write prompt to stdin: {}", e);
                         }
                     });
                 }

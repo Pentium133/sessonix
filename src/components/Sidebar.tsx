@@ -40,6 +40,7 @@ export default function Sidebar() {
   const templates = useTemplateStore((s) => s.templates);
   const loadTemplates = useTemplateStore((s) => s.load);
   const addTemplate = useTemplateStore((s) => s.add);
+  const updateTemplate = useTemplateStore((s) => s.update);
   const removeTemplate = useTemplateStore((s) => s.remove);
 
   const [templateModal, setTemplateModal] = useState<{ open: boolean; editing?: TemplateInfo }>({ open: false });
@@ -293,8 +294,7 @@ export default function Sidebar() {
             if (!activeProjectPath) return;
             try {
               if (templateModal.editing) {
-                await removeTemplate(templateModal.editing.id);
-                await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+                await updateTemplate(templateModal.editing.id, name, prompt);
                 showToast(`Template "${name}" updated`, "success");
               } else {
                 await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });

@@ -3,6 +3,7 @@ import {
   createTemplate,
   listTemplates,
   deleteTemplate,
+  updateTemplate,
 } from "../lib/api";
 import type { TemplateInfo } from "../lib/api";
 
@@ -18,6 +19,7 @@ interface TemplateState {
     initial_prompt?: string;
     skip_permissions: boolean;
   }) => Promise<void>;
+  update: (id: number, name: string, initialPrompt?: string) => Promise<void>;
   remove: (id: number) => Promise<void>;
 }
 
@@ -46,6 +48,15 @@ export const useTemplateStore = create<TemplateState>((set) => ({
       skip_permissions: params.skip_permissions,
     };
     set((state) => ({ templates: [...state.templates, entry] }));
+  },
+
+  update: async (id, name, initialPrompt) => {
+    await updateTemplate(id, name, initialPrompt);
+    set((state) => ({
+      templates: state.templates.map((t) =>
+        t.id === id ? { ...t, name, initial_prompt: initialPrompt ?? null } : t
+      ),
+    }));
   },
 
   remove: async (id) => {

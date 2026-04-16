@@ -33,10 +33,7 @@ function buildArgs(
     if (claudeMode === "resume" && resumeSessionId.trim()) {
       args.push("--resume", resumeSessionId.trim());
     }
-    // -p starts a non-interactive one-shot session, only valid for new sessions
-    if (prompt && claudeMode === "new") {
-      args.push("-p", prompt);
-    }
+    // Prompt delivered via backend stdin write (not -p which is non-interactive one-shot)
     // "new" → session_manager.rs generates --session-id <uuid>
     return args;
   }

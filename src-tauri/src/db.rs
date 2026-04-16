@@ -544,7 +544,6 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn update_template(
         &self,
         id: i64,
