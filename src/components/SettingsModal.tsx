@@ -202,6 +202,7 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
                     <option value="claude">Claude</option>
                     <option value="codex">Codex</option>
                     <option value="gemini">Gemini</option>
+                    <option value="opencode">OpenCode</option>
                     <option value="shell">Shell</option>
                   </select>
                 </div>

@@ -125,6 +125,13 @@ export function useSessionActions() {
         return;
       }
 
+      // OpenCode CLI has no fork subcommand. Two processes resuming the same
+      // session ID would race on the SQLite state, so block the action.
+      if (session.agent_type === "opencode") {
+        showToast("OpenCode does not support forking sessions", "error");
+        return;
+      }
+
       // For Codex with thread ID, use "fork" subcommand instead of "resume"
       let args: string[];
       if (session.agent_type === "codex" && session.agentSessionId) {

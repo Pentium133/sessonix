@@ -305,7 +305,14 @@ export default function SessionLauncher(props: SessionLauncherProps) {
                   ? ({ "--pill-accent": agent.color } as React.CSSProperties)
                   : undefined
               }
-              onClick={() => setSelectedAgent(agent)}
+              onClick={() => {
+                if (agent.type !== selectedAgent.type) {
+                  setSelectedAgent(agent);
+                  // Shared between Claude/Codex/OpenCode resume inputs — clear on agent switch
+                  // so a Codex thread ID doesn't leak into an OpenCode session ID field.
+                  setResumeSessionId("");
+                }
+              }}
             >
               <AgentIcon agentType={agent.type} size={16} />
               <span>{agent.label}</span>

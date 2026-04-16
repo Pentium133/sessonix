@@ -302,6 +302,30 @@ describe("SessionLauncher", () => {
       const launchBtn = screen.getByText("Launch");
       expect((launchBtn as HTMLButtonElement).disabled).toBe(true);
     });
+
+    it("clears resumeSessionId when switching from OpenCode to Codex pill", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+
+      // Enter OpenCode Resume mode with a session ID
+      fireEvent.click(screen.getByText("opencode"));
+      const opencodeResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("OpenCode")
+      );
+      fireEvent.click(opencodeResume!);
+      fireEvent.change(screen.getByPlaceholderText("Session ID (ses_xxx)"), {
+        target: { value: "ses_leak" },
+      });
+
+      // Switch to Codex — resumeSessionId state is shared, must be cleared
+      fireEvent.click(screen.getByText("codex"));
+      fireEvent.click(screen.getByText("Launch"));
+
+      // Codex default is "new" mode → args should be empty, not carry ses_leak
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "codex", args: [] })
+      );
+    });
   });
 
   describe("Launch inside task", () => {

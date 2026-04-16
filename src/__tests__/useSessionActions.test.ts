@@ -19,6 +19,12 @@ vi.mock("../components/TerminalPane", () => ({
   writeToTerminal: vi.fn(),
 }));
 
+vi.mock("../lib/git", () => ({
+  getGitStatus: vi.fn().mockResolvedValue({ is_repo: true, branch: "main", changed_files: 0, modified: 0, added: 0, deleted: 0, head_sha: null, is_worktree: true }),
+  createWorktree: vi.fn(),
+  removeWorktree: vi.fn(),
+}));
+
 // Mock Toast
 const mockShowToast = vi.fn();
 vi.mock("../components/Toast", () => ({
@@ -292,6 +298,37 @@ describe("useSessionActions", () => {
       expect(call.args).toEqual(["run", "--quiet", "--session", "ses_xyz"]);
       expect(call.args).not.toContain("fix the bug");
     });
+
+    it("threads worktree_path through OpenCode relaunch when repo still exists", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: ["run", "--quiet"],
+        agentSessionId: "ses_wt",
+        worktree_path: "/tmp/app/.sessonix-worktrees/feat-x",
+        base_commit: "abc123",
+        status: "exited",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+      vi.mocked(api.createSession).mockResolvedValue(59);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_wt"]);
+      expect(call.worktree_path).toBe("/tmp/app/.sessonix-worktrees/feat-x");
+      expect(call.base_commit).toBe("abc123");
+      expect(call.working_dir).toBe("/tmp/app"); // project root, not worktree
+    });
   });
 
   describe("handleForkSession", () => {
@@ -416,6 +453,33 @@ describe("useSessionActions", () => {
       // After fork, both sessions should exist
       const sessions = useSessionStore.getState().sessions;
       expect(sessions).toHaveLength(2);
+    });
+
+    it("blocks fork for OpenCode (CLI has no fork subcommand)", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: ["run", "--quiet"],
+        agentSessionId: "ses_abc",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleForkSession(session);
+      });
+
+      expect(api.createSession).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.stringContaining("OpenCode does not support forking"),
+        "error"
+      );
     });
 
     it("shows success toast on fork", async () => {
