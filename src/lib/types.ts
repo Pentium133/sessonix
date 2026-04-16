@@ -16,6 +16,17 @@ export interface CreateSessionRequest {
   worktree_path?: string;
   base_commit?: string;
   prompt?: string;
+  task_id?: number;
+}
+
+export interface Task {
+  id: number;
+  projectId: number;
+  name: string;
+  branch: string | null;
+  worktreePath: string | null;
+  baseCommit: string | null;
+  createdAt: number;
 }
 
 export interface Project {
@@ -41,6 +52,7 @@ export interface Session {
   worktree_path: string | null;
   base_commit: string | null;
   initial_prompt: string | null;
+  task_id: number | null;
 }
 
 export interface GitStatus {

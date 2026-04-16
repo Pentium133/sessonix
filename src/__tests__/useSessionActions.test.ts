@@ -47,6 +47,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     worktree_path: null,
     base_commit: null,
     initial_prompt: null,
+    task_id: null,
     ...overrides,
   };
 }
