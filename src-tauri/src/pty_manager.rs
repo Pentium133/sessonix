@@ -21,9 +21,9 @@ pub struct PtySession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     _reader_handle: Mutex<Option<JoinHandle<()>>>,
-    pub is_attached: Arc<AtomicBool>,
-    pub ring_buffer: Arc<Mutex<RingBuffer>>,
-    pub last_lines: Arc<Mutex<VecDeque<String>>>,
+    is_attached: Arc<AtomicBool>,
+    ring_buffer: Arc<Mutex<RingBuffer>>,
+    last_lines: Arc<Mutex<VecDeque<String>>>,
     /// PID of the spawned shell/agent process (used for foreground process detection)
     pub shell_pid: Option<u32>,
 }
@@ -59,6 +59,40 @@ impl PtySession {
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
         Ok(())
+    }
+
+    /// Mark the session as detached and discard any buffered output.
+    ///
+    /// The ring buffer only matters to a UI that's about to reattach, so the
+    /// data already streamed via `pty-output` events is dropped here. The
+    /// reader thread keeps writing into the (now-empty) buffer until the next
+    /// attach returns it via `attach_and_drain`.
+    pub fn detach(&self) {
+        self.is_attached.store(false, Ordering::Relaxed);
+        self.ring_buffer.lock().drain();
+    }
+
+    /// Mark the session as attached. If it was detached, return the bytes
+    /// buffered since detach so the caller can replay them into its terminal.
+    ///
+    /// Idempotent: attaching an already-attached session returns an empty
+    /// vector without touching the ring buffer (data has already been
+    /// streamed via `pty-output` events).
+    pub fn attach_and_drain(&self) -> Vec<u8> {
+        let was_detached = !self.is_attached.load(Ordering::Relaxed);
+        let buffered = if was_detached {
+            self.ring_buffer.lock().drain()
+        } else {
+            Vec::new()
+        };
+        self.is_attached.store(true, Ordering::Relaxed);
+        buffered
+    }
+
+    /// Clone the ring of the most recent terminal lines (used by status
+    /// adapters that pattern-match on output tails).
+    pub fn snapshot_last_lines(&self) -> Vec<String> {
+        self.last_lines.lock().iter().cloned().collect()
     }
 
     /// Check if the shell/agent is idle by comparing the PTY's foreground process group

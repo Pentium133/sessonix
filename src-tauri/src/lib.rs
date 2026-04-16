@@ -72,31 +72,14 @@ fn kill_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), 
 #[tauri::command]
 fn detach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), String> {
     let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
-    session
-        .is_attached
-        .store(false, std::sync::atomic::Ordering::Relaxed);
-    // Drain and discard: data was already sent via events while attached.
-    // This ensures reattach only returns data accumulated during detach.
-    session.ring_buffer.lock().drain();
+    session.detach();
     Ok(())
 }
 
 #[tauri::command]
 fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<Vec<u8>, String> {
     let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
-    let was_detached = !session
-        .is_attached
-        .load(std::sync::atomic::Ordering::Relaxed);
-    // Only drain if session was detached — otherwise data was already sent via events
-    let buffered = if was_detached {
-        session.ring_buffer.lock().drain()
-    } else {
-        Vec::new()
-    };
-    session
-        .is_attached
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    Ok(buffered)
+    Ok(session.attach_and_drain())
 }
 
 #[tauri::command]
@@ -145,7 +128,7 @@ fn get_session_status(
                     jsonl::ClaudeStatus::Error(msg) => (types::SessionStatus::Error, msg),
                     jsonl::ClaudeStatus::Unknown => {
                         // Fall back to terminal-based detection
-                        let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
+                        let lines: Vec<String> = session.snapshot_last_lines();
                         if let Some(adapter) = adapters.get("claude") {
                             let s = adapter.extract_status(&lines);
                             (s.state, s.status_line)
@@ -164,7 +147,7 @@ fn get_session_status(
     // unavailable — theoretically unreachable on Unix (process_id always returns Some).
     let is_shell = matches!(agent_type.as_deref(), Some("shell" | "custom"));
     if is_shell {
-        let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
+        let lines: Vec<String> = session.snapshot_last_lines();
 
         return match session.is_foreground_idle() {
             Some(true) => Ok(types::AgentStatus {
@@ -195,7 +178,7 @@ fn get_session_status(
     }
 
     // Fallback: terminal-based status extraction for other agent types
-    let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
+    let lines: Vec<String> = session.snapshot_last_lines();
     if let Some(ref at) = agent_type {
         if let Some(adapter) = adapters.get(at) {
             return Ok(adapter.extract_status(&lines));
