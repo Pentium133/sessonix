@@ -52,7 +52,7 @@ export default function TemplateSaveModal({ isOpen, onClose, onSave, initial }: 
           placeholder="Prompt text"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          rows={4}
+          rows={10}
         />
         <div className="launcher-actions">
           <button className="launcher-back" onClick={onClose}>Cancel</button>

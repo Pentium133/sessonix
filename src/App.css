@@ -1153,8 +1153,13 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: calc(var(--space) * 5);
-  width: 360px;
+  width: 560px;
   max-width: 90vw;
+}
+
+.template-modal .launcher-prompt {
+  min-height: 200px;
+  max-height: 50vh;
 }
 
 .launcher-project-badge {
