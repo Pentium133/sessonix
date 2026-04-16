@@ -283,27 +283,30 @@ export default function Sidebar() {
           ))
         )}
       </div>
-      <TemplateSaveModal
-        isOpen={templateModal.open}
-        onClose={() => setTemplateModal({ open: false })}
-        initial={templateModal.editing ? { name: templateModal.editing.name, prompt: templateModal.editing.initial_prompt ?? "" } : undefined}
-        onSave={async (name, prompt) => {
-          if (!activeProjectPath) return;
-          try {
-            if (templateModal.editing) {
-              await removeTemplate(templateModal.editing.id);
-              await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
-              showToast(`Template "${name}" updated`, "success");
-            } else {
-              await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
-              showToast(`Template "${name}" saved`, "success");
+      {templateModal.open && (
+        <TemplateSaveModal
+          title={templateModal.editing ? "Edit Template" : "New Template"}
+          initialName={templateModal.editing?.name}
+          initialPrompt={templateModal.editing?.initial_prompt ?? undefined}
+          onClose={() => setTemplateModal({ open: false })}
+          onSave={async (name, prompt) => {
+            if (!activeProjectPath) return;
+            try {
+              if (templateModal.editing) {
+                await removeTemplate(templateModal.editing.id);
+                await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+                showToast(`Template "${name}" updated`, "success");
+              } else {
+                await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+                showToast(`Template "${name}" saved`, "success");
+              }
+              setTemplateModal({ open: false });
+            } catch (err) {
+              showToast(String(err), "error");
             }
-            setTemplateModal({ open: false });
-          } catch (err) {
-            showToast(String(err), "error");
-          }
-        }}
-      />
+          }}
+        />
+      )}
     </aside>
   );
 }

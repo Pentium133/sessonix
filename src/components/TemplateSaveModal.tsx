@@ -1,53 +1,29 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 
 interface TemplateSaveModalProps {
-  isOpen: boolean;
+  title: string;
+  initialName?: string;
+  initialPrompt?: string;
   onClose: () => void;
   onSave: (name: string, prompt: string) => void;
-  initial?: { name: string; prompt: string };
 }
 
-export default function TemplateSaveModal({ isOpen, onClose, onSave, initial }: TemplateSaveModalProps) {
-  const [name, setName] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const nameRef = useRef<HTMLInputElement>(null);
-
-  const prevOpen = useRef(false);
-  useEffect(() => {
-    if (isOpen && !prevOpen.current) {
-      setName(initial?.name ?? "");
-      setPrompt(initial?.prompt ?? "");
-      setTimeout(() => nameRef.current?.focus(), 50);
-    }
-    prevOpen.current = isOpen;
-  });
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
+export default function TemplateSaveModal({ title, initialName, initialPrompt, onClose, onSave }: TemplateSaveModalProps) {
+  const [name, setName] = useState(initialName ?? "");
+  const [prompt, setPrompt] = useState(initialPrompt ?? "");
 
   const canSave = name.trim() && prompt.trim();
 
   return (
     <div className="launcher-overlay" onClick={onClose}>
       <div className="template-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="launcher-title">
-          {initial ? "Edit Template" : "New Template"}
-        </div>
+        <div className="launcher-title">{title}</div>
         <input
-          ref={nameRef}
           className="launcher-input"
           placeholder="Template name"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && canSave) onSave(name.trim(), prompt.trim()); }}
+          autoFocus
         />
         <textarea
           className="launcher-input launcher-prompt"
