@@ -269,6 +269,7 @@ struct SessionInfo {
     worktree_path: Option<String>,
     base_commit: Option<String>,
     initial_prompt: Option<String>,
+    task_id: Option<i64>,
 }
 
 #[tauri::command]
@@ -312,6 +313,7 @@ fn list_sessions(
             worktree_path: s.worktree_path,
             base_commit: s.base_commit,
             initial_prompt: s.initial_prompt,
+            task_id: s.task_id,
         })
         .collect())
 }
