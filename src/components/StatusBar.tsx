@@ -9,6 +9,8 @@ export default function StatusBar() {
   const projects = useProjectStore((s) => s.projects);
   const theme = useUiStore((s) => s.theme);
   const cycleTheme = useUiStore((s) => s.cycleTheme);
+  const uiZoom = useUiStore((s) => s.uiZoom);
+  const resetZoom = useUiStore((s) => s.resetZoom);
 
   const running = sessions.filter((s) => s.status === "running").length;
   const total = sessions.length;
@@ -26,6 +28,16 @@ export default function StatusBar() {
       </span>
 
       <span className="statusbar-right">
+        {Math.round(uiZoom * 100) !== 100 && (
+          <button
+            className="theme-toggle-sm"
+            onClick={resetZoom}
+            title="Reset zoom (Cmd+0)"
+            style={{ fontSize: 10, fontFamily: "var(--font-mono)" }}
+          >
+            {Math.round(uiZoom * 100)}%
+          </button>
+        )}
         <button
           className="theme-toggle-sm"
           onClick={cycleTheme}

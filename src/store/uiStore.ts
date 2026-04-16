@@ -6,6 +6,29 @@ import { THEME_IDS, getThemeById, resolveSystemTheme } from "../lib/themes";
 import type { ThemeId } from "../lib/themes";
 import { getSetting, setSetting } from "../lib/api";
 
+const ZOOM_MIN = 0.75;
+const ZOOM_MAX = 1.5;
+const ZOOM_STEP = 0.05;
+
+function applyZoom(zoom: number) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.style.setProperty("zoom", String(zoom));
+  root.style.setProperty("--ui-zoom-inverse", String(1 / zoom));
+  // Compensate: zoom on <html> scales the box, so shrink dimensions
+  // so that zoomed box fits exactly in the viewport.
+  root.style.height = `${100 / zoom}vh`;
+  root.style.width = `${100 / zoom}vw`;
+  root.style.overflow = "hidden";
+}
+
+let zoomTimer: ReturnType<typeof setTimeout> | undefined;
+function debouncedSaveZoom(zoom: number) {
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => {
+    void setSetting("ui_zoom", String(zoom));
+  }, 300);
+}
 type LauncherState =
   | { open: false }
   | { open: true; mode: "project" }
@@ -15,6 +38,7 @@ interface UiState {
   sidebarWidth: number;
   sidebarCollapsed: boolean;
   theme: Theme;
+  uiZoom: number;
   launcher: LauncherState;
   settingsOpen: boolean;
 
@@ -23,6 +47,10 @@ interface UiState {
   setCollapsed: (collapsed: boolean) => void;
   setTheme: (theme: Theme) => void;
   cycleTheme: () => void;
+  setUiZoom: (zoom: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
   openLauncher: (state: LauncherState) => void;
   closeLauncher: () => void;
   openSettings: () => void;
@@ -66,6 +94,7 @@ export const useUiStore = create<UiState>()(
       sidebarWidth: SIDEBAR_DEFAULT,
       sidebarCollapsed: false,
       theme: "system" as Theme,
+      uiZoom: 1.0,
       launcher: { open: false } as LauncherState,
       settingsOpen: false,
 
@@ -102,6 +131,27 @@ export const useUiStore = create<UiState>()(
         void setSetting("theme", next);
       },
 
+      setUiZoom: (zoom) => {
+        const clamped = Math.round(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom)) * 20) / 20;
+        applyZoom(clamped);
+        set({ uiZoom: clamped });
+        debouncedSaveZoom(clamped);
+      },
+
+      zoomIn: () => {
+        const { uiZoom, setUiZoom } = get();
+        setUiZoom(uiZoom + ZOOM_STEP);
+      },
+
+      zoomOut: () => {
+        const { uiZoom, setUiZoom } = get();
+        setUiZoom(uiZoom - ZOOM_STEP);
+      },
+
+      resetZoom: () => {
+        get().setUiZoom(1.0);
+      },
+
       openLauncher: (state) => set({ launcher: state }),
 
       closeLauncher: () => set({ launcher: { open: false } }),
@@ -115,6 +165,7 @@ export const useUiStore = create<UiState>()(
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,
         theme: state.theme,
+        uiZoom: state.uiZoom,
       }),
       merge: (persisted, current) => {
         const p = persisted as Partial<UiState> | undefined;
@@ -127,8 +178,14 @@ export const useUiStore = create<UiState>()(
         // Validate persisted theme (e.g. downgrade scenario)
         if (!isValidTheme(theme as string)) theme = "system";
 
-        const merged = { ...current, ...p, theme } as UiState;
+        const rawZoom = p?.uiZoom;
+        const uiZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX,
+          typeof rawZoom === "number" && !isNaN(rawZoom) ? rawZoom : 1.0
+        ));
+
+        const merged = { ...current, ...p, theme, uiZoom } as UiState;
         applyTheme(merged.theme);
+        applyZoom(merged.uiZoom);
         return merged;
       },
     }
@@ -140,7 +197,8 @@ void Promise.all([
   getSetting("theme"),
   getSetting("sidebar_width"),
   getSetting("sidebar_collapsed"),
-]).then(([dbTheme, dbWidth, dbCollapsed]) => {
+  getSetting("ui_zoom"),
+]).then(([dbTheme, dbWidth, dbCollapsed, dbZoom]) => {
   const state = useUiStore.getState();
 
   if (dbTheme && isValidTheme(dbTheme) && dbTheme !== state.theme) {
@@ -162,6 +220,13 @@ void Promise.all([
   }
   if (Object.keys(updates).length > 0) {
     useUiStore.setState(updates);
+  }
+
+  if (dbZoom) {
+    const z = parseFloat(dbZoom);
+    if (!isNaN(z) && z !== state.uiZoom) {
+      state.setUiZoom(z);
+    }
   }
 });
 
