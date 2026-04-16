@@ -123,7 +123,7 @@ export default function SessionItem({
               <>
                 {session.worktree_path && (
                   <button
-                    className="card-btn"
+                    className="card-btn card-btn-wt-remove"
                     onClick={(e) => {
                       e.stopPropagation();
                       removeWorktree(session.worktree_path!).then(() => {

@@ -7,10 +7,13 @@ import type { Session } from "../lib/types";
 
 /** Build resume/relaunch args for a session based on agent type. */
 function buildResumeArgs(session: Session): string[] {
+  const prompt = session.initial_prompt?.trim() || "";
+
   if (session.agent_type === "claude" && session.agentSessionId) {
     const skipPerms = session.args.includes("--dangerously-skip-permissions")
       || useSettingsStore.getState().claudeSkipPermissions;
     const flags = skipPerms ? ["--dangerously-skip-permissions"] : [];
+    // Claude resume: no -p flag (it's incompatible with --resume)
     return [...flags, "--resume", session.agentSessionId];
   }
   if (session.agent_type === "claude") {
@@ -24,6 +27,10 @@ function buildResumeArgs(session: Session): string[] {
   }
   if (session.agent_type === "codex") {
     return ["resume", "--last"];
+  }
+  // Gemini: prompt as positional arg (same as initial launch)
+  if (session.agent_type === "gemini" && prompt) {
+    return [prompt];
   }
   return session.args;
 }

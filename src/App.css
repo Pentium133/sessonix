@@ -677,6 +677,11 @@ body {
   border-color: var(--claude);
 }
 
+.card-btn-wt-remove:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
 /* Kill/fork confirmation inline */
 .kill-confirm {
   display: flex;

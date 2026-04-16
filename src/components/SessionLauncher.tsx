@@ -32,7 +32,8 @@ function buildArgs(
     if (claudeMode === "resume" && resumeSessionId.trim()) {
       args.push("--resume", resumeSessionId.trim());
     }
-    if (prompt) {
+    // -p starts a non-interactive one-shot session, only valid for new sessions
+    if (prompt && claudeMode === "new") {
       args.push("-p", prompt);
     }
     // "new" → session_manager.rs generates --session-id <uuid>
@@ -108,6 +109,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [worktreeCreating, setWorktreeCreating] = useState(false);
   const taskNameRef = useRef<HTMLInputElement>(null);
   const folderPickerTriggered = useRef(false);
+  const skipPermsAutoSet = useRef(false);
 
   // Reset state when opening
   useEffect(() => {
@@ -119,6 +121,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       setClaudeSessionMode("new");
       setCodexSessionMode("new");
       setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
+      skipPermsAutoSet.current = false;
       setResumeSessionId("");
       setPrompt("");
       setExtraArgs("");
@@ -296,9 +299,18 @@ export default function SessionLauncher(props: SessionLauncherProps) {
             value={prompt}
             onChange={(e) => {
               setPrompt(e.target.value);
-              // Auto-check skip permissions for Claude when prompt is entered
-              if (selectedAgent.type === "claude" && e.target.value.trim()) {
-                setSkipPermissions(true);
+              if (selectedAgent.type === "claude") {
+                if (e.target.value.trim()) {
+                  // Auto-check skip permissions when prompt is entered
+                  if (!skipPermissions) {
+                    setSkipPermissions(true);
+                    skipPermsAutoSet.current = true;
+                  }
+                } else if (skipPermsAutoSet.current) {
+                  // Auto-uncheck only if we auto-set it (user didn't toggle manually)
+                  setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
+                  skipPermsAutoSet.current = false;
+                }
               }
             }}
             rows={3}
@@ -339,7 +351,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
               <input
                 type="checkbox"
                 checked={skipPermissions}
-                onChange={(e) => setSkipPermissions(e.target.checked)}
+                onChange={(e) => { setSkipPermissions(e.target.checked); skipPermsAutoSet.current = false; }}
               />
               Skip permissions
             </label>
