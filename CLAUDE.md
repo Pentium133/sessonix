@@ -90,6 +90,13 @@ Switch from A to B:
 - **Error handling:** Backend returns `Result<T, String>` from commands. Frontend shows errors via `showToast()`.
 - **Tests:** Rust tests are inline `#[cfg(test)] mod tests` in each file. Frontend uses Vitest + jsdom + @testing-library/react.
 
+## Gotchas
+
+- **Dogfooding worktrees:** Task worktrees land in `.sessonix-worktrees/` inside this repo. Excluded from Vite (`server.watch.ignored`) and Vitest (`test.exclude`) — don't remove, or HMR reload will wipe runtime state and Vitest will double-count tests.
+- **Blocking ops in async commands:** Wrap git2/rusqlite calls in `tauri::async_runtime::spawn_blocking(move || { ... })` when the command is `async fn`. See `create_task`/`delete_task` in `lib.rs`.
+- **Version bump:** `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` in lockstep. Then `cd src-tauri && cargo check` to refresh `Cargo.lock`.
+- **Transliteration order (`src/lib/slugify.ts`):** Map Cyrillic BEFORE NFD. NFD decomposes `ё`/`ї` into base letter + combining mark — if NFD runs first, the Cyrillic map never matches and `ё` degrades to `e` instead of `yo`.
+
 ## Design System
 Always read DESIGN.md before making any visual or UI decisions.
 All font choices, colors, spacing, and aesthetic direction are defined there.
