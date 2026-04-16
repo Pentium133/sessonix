@@ -1163,6 +1163,171 @@ body {
   max-height: 50vh;
 }
 
+/* Task create modal — smaller than template modal (fewer fields). */
+.task-create-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: calc(var(--space) * 5);
+  width: 480px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--space) * 2);
+}
+
+.task-create-modal .launcher-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-top: -4px;
+}
+
+/* Task groups in sidebar */
+.sidebar-tasks-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: calc(var(--space) * 2) calc(var(--space) * 3) calc(var(--space)) calc(var(--space) * 3);
+  margin-top: calc(var(--space) * 2);
+}
+
+.task-group {
+  border-left: 2px solid var(--border);
+  margin: 0 calc(var(--space) * 2) calc(var(--space)) calc(var(--space) * 2);
+}
+
+.task-group-header {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space) * 1.5);
+  padding: calc(var(--space)) calc(var(--space) * 2);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  border-radius: var(--radius);
+  user-select: none;
+}
+
+.task-group-header:hover {
+  background: var(--surface-hover);
+}
+
+.task-group-chevron {
+  transition: transform 0.12s ease;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.task-group-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.task-group-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-branch-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-group-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 14px;
+  text-align: right;
+}
+
+.task-group-actions {
+  display: none;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.task-group-header:hover .task-group-actions {
+  display: flex;
+}
+
+.task-group-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 3px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-group-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.task-group-btn-danger:hover {
+  color: var(--error, #e5484d);
+}
+
+.task-group-body {
+  padding-left: calc(var(--space) * 2);
+}
+
+.task-group-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: calc(var(--space)) calc(var(--space) * 2);
+  font-style: italic;
+}
+
+.new-task-btn {
+  color: var(--accent);
+}
+
+.new-task-btn:disabled {
+  color: var(--text-dim);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Launcher: badge shown when creating a session inside a task */
+.launcher-task-badge {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space) * 1.5);
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: calc(var(--space) * 2);
+}
+
+.launcher-task-branch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface);
+}
+
 .launcher-project-badge {
   font-size: 11px;
   color: var(--text-dim);

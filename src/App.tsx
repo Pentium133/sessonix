@@ -334,6 +334,7 @@ function App() {
       worktree_path?: string;
       base_commit?: string;
       prompt?: string;
+      task_id?: number;
     }) => {
       try {
         await useSessionStore.getState().addSession({
@@ -345,6 +346,7 @@ function App() {
           worktree_path: params.worktree_path,
           base_commit: params.base_commit,
           prompt: params.prompt,
+          task_id: params.task_id,
         });
       } catch (err) {
         showToast(String(err), "error");
@@ -430,6 +432,7 @@ function App() {
           onClose={closeLauncher}
           projectPath={launcher.projectPath}
           prefill={launcher.prefill}
+          taskId={launcher.taskId}
           onLaunch={handleLaunchSession}
         />
       )}

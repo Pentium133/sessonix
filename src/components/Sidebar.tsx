@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import { useTemplateStore } from "../store/templateStore";
+import { useTaskStore } from "../store/taskStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { getGitStatus } from "../lib/git";
@@ -11,8 +12,10 @@ import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
 import TemplateItem from "./TemplateItem";
 import TemplateSaveModal from "./TemplateSaveModal";
+import TaskCreateModal from "./TaskCreateModal";
+import TaskGroup from "./TaskGroup";
 import WorktreeIcon from "./WorktreeIcon";
-import type { GitStatus } from "../lib/types";
+import type { GitStatus, Session, Task } from "../lib/types";
 import type { TemplateInfo } from "../lib/api";
 
 export default function Sidebar() {
@@ -43,7 +46,12 @@ export default function Sidebar() {
   const updateTemplate = useTemplateStore((s) => s.update);
   const removeTemplate = useTemplateStore((s) => s.remove);
 
+  const tasks = useTaskStore((s) => s.tasks);
+  const destroyTask = useTaskStore((s) => s.destroy);
+
   const [templateModal, setTemplateModal] = useState<{ open: boolean; editing?: TemplateInfo }>({ open: false });
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>({});
 
   const [projectGit, setProjectGit] = useState<GitStatus | null>(null);
 
@@ -66,9 +74,86 @@ export default function Sidebar() {
     .filter((s) => s.working_dir === activeProjectPath)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
+  // Split sessions: ungrouped (task_id === null) stay on top; grouped sessions
+  // render inside their task group.
+  const { ungroupedSessions, sessionsByTaskId } = useMemo(() => {
+    const ungrouped: Session[] = [];
+    const byTask = new Map<number, Session[]>();
+    for (const s of projectSessions) {
+      if (s.task_id == null) {
+        ungrouped.push(s);
+      } else {
+        const list = byTask.get(s.task_id) ?? [];
+        list.push(s);
+        byTask.set(s.task_id, list);
+      }
+    }
+    return { ungroupedSessions: ungrouped, sessionsByTaskId: byTask };
+  }, [projectSessions]);
+
   const onNewSession = () => {
     if (activeProjectPath) {
       useUiStore.getState().openLauncher({ open: true, mode: "session", projectPath: activeProjectPath });
+    }
+  };
+
+  const onNewTask = () => {
+    if (!activeProjectPath || !projectGit?.is_repo) return;
+    setTaskModalOpen(true);
+  };
+
+  const toggleTaskExpanded = (taskId: number) => {
+    setExpandedTasks((prev) => ({
+      ...prev,
+      [taskId]: prev[taskId] === undefined ? false : !prev[taskId],
+    }));
+  };
+
+  const isTaskExpanded = (taskId: number) =>
+    expandedTasks[taskId] === undefined ? true : expandedTasks[taskId];
+
+  const openLauncherForTask = (task: Task) => {
+    if (!activeProjectPath) return;
+    useUiStore.getState().openLauncher({
+      open: true,
+      mode: "session",
+      projectPath: activeProjectPath,
+      taskId: task.id,
+    });
+  };
+
+  const launchShellInTask = async (task: Task) => {
+    if (!activeProjectPath) return;
+    try {
+      await useSessionStore.getState().addSession({
+        command: "zsh",
+        args: [],
+        working_dir: activeProjectPath,
+        task_name: `${task.name} shell`,
+        agent_type: "shell",
+        task_id: task.id,
+      });
+    } catch (e) {
+      showToast(`Failed to launch shell: ${e}`, "error");
+    }
+  };
+
+  const deleteTaskWithConfirm = async (task: Task) => {
+    const taskSessions = sessionsByTaskId.get(task.id) ?? [];
+    const runningCount = taskSessions.filter((s) => s.status !== "exited").length;
+    const msg = runningCount > 0
+      ? `Kill ${runningCount} running session${runningCount > 1 ? "s" : ""} and remove "${task.name}" (worktree will be deleted)?`
+      : `Remove task "${task.name}" and its worktree?`;
+    if (!window.confirm(msg)) return;
+    try {
+      await destroyTask(task.id);
+      // Backend deletes sessions via cascade; mirror in sessionStore.
+      if (taskSessions.length > 0) {
+        useSessionStore.getState().removeSessions(taskSessions.map((s) => s.id));
+      }
+      showToast(`Task "${task.name}" removed`, "info");
+    } catch (e) {
+      showToast(`Failed to remove task: ${e}`, "error");
     }
   };
 
@@ -127,6 +212,14 @@ export default function Sidebar() {
               <line x1="1" y1="6" x2="11" y2="6" />
             </svg>
           </button>
+          <button
+            className="new-btn new-task-btn"
+            onClick={onNewTask}
+            disabled={!projectGit?.is_repo}
+            title={projectGit?.is_repo ? "New task (creates worktree)" : "Project must be a git repository"}
+          >
+            <WorktreeIcon className="session-wt-icon" />
+          </button>
           {confirmRemoveProject ? (
             <>
               <button
@@ -178,7 +271,7 @@ export default function Sidebar() {
         </div>
       )}
       <div className="sidebar-content">
-        {projectSessions.length === 0 ? (
+        {projectSessions.length === 0 && tasks.length === 0 ? (
           <div className="session-empty">
             No sessions.{" "}
             <button className="inline-link" onClick={onNewSession}>
@@ -186,55 +279,79 @@ export default function Sidebar() {
             </button>
           </div>
         ) : (
-          projectSessions.map((session) => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              isActive={session.id === activeSessionId}
-              isDragOver={dragOverId === session.id && draggingId !== session.id}
-              projectBranch={projectGit?.branch ?? null}
-              onSwitch={() => { if (!draggingIdRef.current) switchSession(session.id); }}
-              onRelaunch={handleRelaunchSession}
-              onRemove={handleRemoveSession}
-              onFork={handleForkSession}
-              onDragStart={(e) => {
-                setDraggingId(session.id);
-                draggingIdRef.current = session.id;
-                e.dataTransfer.effectAllowed = "move";
-                e.dataTransfer.setData("text/plain", String(session.id));
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                if (session.id !== draggingIdRef.current) {
-                  setDragOverId(session.id);
-                  dragOverRef.current = { id: session.id, sortOrder: session.sortOrder };
-                }
-              }}
-              onDragLeave={(e) => {
-                const related = e.relatedTarget as Node | null;
-                if (!e.currentTarget.contains(related)) {
+          <>
+            {ungroupedSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                isActive={session.id === activeSessionId}
+                isDragOver={dragOverId === session.id && draggingId !== session.id}
+                projectBranch={projectGit?.branch ?? null}
+                onSwitch={() => { if (!draggingIdRef.current) switchSession(session.id); }}
+                onRelaunch={handleRelaunchSession}
+                onRemove={handleRemoveSession}
+                onFork={handleForkSession}
+                onDragStart={(e) => {
+                  setDraggingId(session.id);
+                  draggingIdRef.current = session.id;
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", String(session.id));
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (session.id !== draggingIdRef.current) {
+                    setDragOverId(session.id);
+                    dragOverRef.current = { id: session.id, sortOrder: session.sortOrder };
+                  }
+                }}
+                onDragLeave={(e) => {
+                  const related = e.relatedTarget as Node | null;
+                  if (!e.currentTarget.contains(related)) {
+                    setDragOverId(null);
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  dropAcceptedRef.current = true;
+                }}
+                onDragEnd={() => {
+                  const dragId = draggingIdRef.current;
+                  const over = dragOverRef.current;
+                  if (dropAcceptedRef.current && dragId !== null && over && dragId !== over.id) {
+                    reorderSessionOrder(dragId, over.sortOrder);
+                  }
+                  setDraggingId(null);
+                  draggingIdRef.current = null;
                   setDragOverId(null);
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                dropAcceptedRef.current = true;
-              }}
-              onDragEnd={() => {
-                const dragId = draggingIdRef.current;
-                const over = dragOverRef.current;
-                if (dropAcceptedRef.current && dragId !== null && over && dragId !== over.id) {
-                  reorderSessionOrder(dragId, over.sortOrder);
-                }
-                setDraggingId(null);
-                draggingIdRef.current = null;
-                setDragOverId(null);
-                dragOverRef.current = null;
-                dropAcceptedRef.current = false;
-              }}
-            />
-          ))
+                  dragOverRef.current = null;
+                  dropAcceptedRef.current = false;
+                }}
+              />
+            ))}
+
+            {tasks.length > 0 && (
+              <div className="sidebar-tasks-header">Tasks</div>
+            )}
+            {tasks.map((task) => (
+              <TaskGroup
+                key={task.id}
+                task={task}
+                sessions={sessionsByTaskId.get(task.id) ?? []}
+                isExpanded={isTaskExpanded(task.id)}
+                activeSessionId={activeSessionId}
+                projectBranch={projectGit?.branch ?? null}
+                onToggle={() => toggleTaskExpanded(task.id)}
+                onAddAgent={() => openLauncherForTask(task)}
+                onInstantShell={() => launchShellInTask(task)}
+                onDelete={() => deleteTaskWithConfirm(task)}
+                onSwitchSession={(id) => switchSession(id)}
+                onRelaunchSession={handleRelaunchSession}
+                onRemoveSession={handleRemoveSession}
+                onForkSession={handleForkSession}
+              />
+            ))}
+          </>
         )}
       </div>
       <div className="sidebar-templates">
@@ -284,6 +401,12 @@ export default function Sidebar() {
           ))
         )}
       </div>
+      {taskModalOpen && activeProjectPath && (
+        <TaskCreateModal
+          projectPath={activeProjectPath}
+          onClose={() => setTaskModalOpen(false)}
+        />
+      )}
       {templateModal.open && (
         <TemplateSaveModal
           title={templateModal.editing ? "Edit Template" : "New Template"}

@@ -39,7 +39,7 @@ function debouncedSaveZoom(zoom: number) {
 type LauncherState =
   | { open: false }
   | { open: true; mode: "project" }
-  | { open: true; mode: "session"; projectPath: string; prefill?: LauncherPrefill };
+  | { open: true; mode: "session"; projectPath: string; prefill?: LauncherPrefill; taskId?: number };
 
 interface UiState {
   sidebarWidth: number;
@@ -237,8 +237,9 @@ void Promise.all([
   }
 });
 
-// Listen for OS theme changes — update CSS vars when preference is "system"
-if (typeof window !== "undefined") {
+// Listen for OS theme changes — update CSS vars when preference is "system".
+// Guarded against missing matchMedia (test environments, legacy WebViews).
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
   window
     .matchMedia("(prefers-color-scheme: light)")
     .addEventListener("change", () => {
