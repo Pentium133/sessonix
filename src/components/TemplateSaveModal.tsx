@@ -12,13 +12,15 @@ export default function TemplateSaveModal({ isOpen, onClose, onSave, initial }: 
   const [prompt, setPrompt] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
+  const prevOpen = useRef(false);
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !prevOpen.current) {
       setName(initial?.name ?? "");
       setPrompt(initial?.prompt ?? "");
       setTimeout(() => nameRef.current?.focus(), 50);
     }
-  }, [isOpen, initial]);
+    prevOpen.current = isOpen;
+  });
 
   useEffect(() => {
     if (!isOpen) return;
