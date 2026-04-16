@@ -21,23 +21,22 @@ impl AgentAdapter for OpenCodeAdapter {
         // output (no Bubble Tea TUI, no spinner).
         let mut args = vec!["run".to_string(), "--quiet".to_string()];
 
-        // If extra_args starts with a resume flag (`--session` or `--continue`),
-        // splice it in before the prompt so it reaches `opencode run` in the
-        // expected order. Otherwise prompt comes first, then extra_args.
+        // If extra_args carries a resume flag (`--session` or `--continue`),
+        // splice it in before the prompt so flag+value stays contiguous and
+        // reaches `opencode run` in CLI-correct order — regardless of where in
+        // extra_args the flag appears. Otherwise prompt comes first.
         let has_resume_flag = config
             .extra_args
-            .first()
-            .is_some_and(|a| matches!(a.as_str(), "--session" | "--continue"));
+            .iter()
+            .any(|a| matches!(a.as_str(), "--session" | "--continue"));
 
         if has_resume_flag {
             args.extend(config.extra_args.clone());
-            if let Some(ref prompt) = config.prompt {
-                args.push(prompt.clone());
-            }
-        } else {
-            if let Some(ref prompt) = config.prompt {
-                args.push(prompt.clone());
-            }
+        }
+        if let Some(ref prompt) = config.prompt {
+            args.push(prompt.clone());
+        }
+        if !has_resume_flag {
             args.extend(config.extra_args.clone());
         }
 
@@ -52,6 +51,10 @@ impl AgentAdapter for OpenCodeAdapter {
         //   ←  edit  (U+2190)
         //   $  bash  (ASCII; at START of line — distinct from EOL shell prompt)
         //   ✱  grep  (U+2731)
+        //
+        // Order: tool markers (specific prefixes) → error (substring) → idle
+        // (suffix). This prevents a filename-containing "error" like
+        // `"→ error.log"` from being mis-classified as an Error state.
         for line in last_lines.iter().rev() {
             let stripped = super::strip_ansi(line);
             let trimmed = stripped.trim();
@@ -60,25 +63,7 @@ impl AgentAdapter for OpenCodeAdapter {
                 continue;
             }
 
-            // Error takes priority — catch it before idle heuristics so an
-            // "Error: ..." line isn't masked by a trailing prompt character.
-            if trimmed.contains("error") || trimmed.contains("Error") {
-                return AgentStatus {
-                    state: SessionStatus::Error,
-                    status_line: super::truncate(trimmed, 80),
-                };
-            }
-
-            // Idle: prompt character at END of line (shell-style, awaiting input).
-            // Must be checked BEFORE the bash-tool pattern (`$ cmd` at start).
-            if trimmed.ends_with("$") || trimmed.ends_with(">") {
-                return AgentStatus {
-                    state: SessionStatus::Idle,
-                    status_line: "Waiting for input".to_string(),
-                };
-            }
-
-            // Tool-call markers at START of line.
+            // 1. Tool-call markers at START of line — most specific.
             if trimmed.starts_with('→') {
                 return AgentStatus {
                     state: SessionStatus::Running,
@@ -104,6 +89,22 @@ impl AgentAdapter for OpenCodeAdapter {
                 return AgentStatus {
                     state: SessionStatus::Running,
                     status_line: "Searching".to_string(),
+                };
+            }
+
+            // 2. Error (substring) — only fires on lines without a tool prefix.
+            if trimmed.contains("error") || trimmed.contains("Error") {
+                return AgentStatus {
+                    state: SessionStatus::Error,
+                    status_line: super::truncate(trimmed, 80),
+                };
+            }
+
+            // 3. Idle: prompt character at END of line.
+            if trimmed.ends_with('$') || trimmed.ends_with('>') {
+                return AgentStatus {
+                    state: SessionStatus::Idle,
+                    status_line: "Waiting for input".to_string(),
                 };
             }
         }
@@ -186,6 +187,38 @@ mod tests {
         let (cmd, args, _env) = adapter.build_command(&config);
         assert_eq!(cmd, "opencode");
         assert_eq!(args, vec!["run", "--quiet", "--continue", "next task"]);
+    }
+
+    #[test]
+    fn test_build_command_resume_flag_not_first() {
+        // Regression: frontend may pass extra flags ahead of --session, e.g.
+        // `opencode run --quiet --model foo --session ses_x prompt`. The
+        // adapter must still group extra_args before prompt so flag+value
+        // stays together.
+        let adapter = OpenCodeAdapter;
+        let config = LaunchConfig {
+            working_dir: "/tmp".to_string(),
+            prompt: Some("continue".to_string()),
+            extra_args: vec![
+                "--model".to_string(),
+                "foo".to_string(),
+                "--session".to_string(),
+                "ses_xyz".to_string(),
+            ],
+        };
+        let (_, args, _) = adapter.build_command(&config);
+        assert_eq!(
+            args,
+            vec![
+                "run",
+                "--quiet",
+                "--model",
+                "foo",
+                "--session",
+                "ses_xyz",
+                "continue",
+            ]
+        );
     }
 
     #[test]
@@ -335,6 +368,21 @@ mod tests {
         let status = adapter.extract_status(&lines);
         assert_eq!(status.state, SessionStatus::Running);
         assert_eq!(status.status_line, "");
+    }
+
+    #[test]
+    fn test_extract_status_reading_file_named_error() {
+        // Regression for M3: a filename with "error" in its name must still be
+        // classified as Reading, not Error — tool-prefix check wins.
+        let adapter = OpenCodeAdapter;
+        let lines = vec!["→ src/error.log".to_string()];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Running);
+        assert!(
+            status.status_line.contains("Reading"),
+            "expected Reading, got {:?}",
+            status.status_line
+        );
     }
 
     #[test]

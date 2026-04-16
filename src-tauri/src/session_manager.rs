@@ -1,6 +1,7 @@
 use crate::db::Db;
 use crate::error::AppError;
 use crate::pty_manager::PtyManager;
+use rusqlite::Connection;
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -46,38 +47,34 @@ pub fn read_codex_thread_id(working_dir: &str, not_before_secs: i64) -> Option<S
 /// OpenCode uses XDG paths on all platforms (confirmed macOS 1.4.3),
 /// so `$HOME/.local/share/opencode/opencode.db` — not
 /// `~/Library/Application Support`.
-pub fn opencode_db_path() -> Option<std::path::PathBuf> {
+pub(crate) fn opencode_db_path() -> Option<std::path::PathBuf> {
     let home = dirs::home_dir()?;
     Some(home.join(".local").join("share").join("opencode").join("opencode.db"))
 }
 
-/// Read the most recent OpenCode session ID for `working_dir`, created at or
-/// after `not_before_millis` (Unix timestamp in milliseconds — OpenCode stores
-/// `time_created` in ms, not seconds).
-///
-/// Returns `None` when the DB is absent, query fails, or no matching session
-/// exists. Guards against absurdly long IDs (>256 chars) and records missing
-/// the `ses_` prefix to avoid picking up corrupted or unrelated rows.
-pub fn read_opencode_session_id(working_dir: &str, not_before_millis: i64) -> Option<String> {
-    let db_path = opencode_db_path()?;
-    read_opencode_session_id_from_path(&db_path, working_dir, not_before_millis)
+/// Open OpenCode's DB read-only with NO_MUTEX (single-thread use) and no
+/// TOCTOU pre-check — the only failure mode of interest is "couldn't open",
+/// which `.ok()?` reports as `None`. Callers retry on `None` returns.
+pub(crate) fn open_opencode_db(path: &std::path::Path) -> Option<Connection> {
+    Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()
 }
 
-/// Path-parametrised variant for tests. Production code should call
-/// `read_opencode_session_id` which supplies the default DB path.
-pub fn read_opencode_session_id_from_path(
-    db_path: &std::path::Path,
+/// Query `conn` for the most recent OpenCode session ID matching `working_dir`
+/// and created at or after `not_before_millis` (milliseconds, matching
+/// `session.time_created`).
+///
+/// Guards: rejects IDs >256 chars, without the `ses_` prefix, or containing
+/// anything other than `[a-zA-Z0-9_]` — defends against log-injection and
+/// downstream rendering of ANSI/control characters from a crafted DB.
+pub(crate) fn query_opencode_session_id(
+    conn: &Connection,
     working_dir: &str,
     not_before_millis: i64,
 ) -> Option<String> {
-    if !db_path.exists() {
-        return None;
-    }
-    let conn = rusqlite::Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
     let id: String = conn
         .query_row(
             "SELECT id FROM session \
@@ -90,7 +87,23 @@ pub fn read_opencode_session_id_from_path(
     if id.len() > 256 || !id.starts_with("ses_") {
         return None;
     }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
     Some(id)
+}
+
+/// Path-parametrised convenience wrapper used by tests. Production polling
+/// uses `open_opencode_db` + `query_opencode_session_id` directly to reuse a
+/// single connection across ticks.
+#[cfg(test)]
+pub(crate) fn read_opencode_session_id_from_path(
+    db_path: &std::path::Path,
+    working_dir: &str,
+    not_before_millis: i64,
+) -> Option<String> {
+    let conn = open_opencode_db(db_path)?;
+    query_opencode_session_id(&conn, working_dir, not_before_millis)
 }
 
 /// Pull the `ses_xxx` OpenCode session ID out of resume-style args.
@@ -102,7 +115,7 @@ pub fn read_opencode_session_id_from_path(
 ///
 /// Guards: the candidate ID must start with `ses_` — anything else is
 /// treated as absent so polling takes over.
-pub fn extract_opencode_resume_id(args: &[String]) -> Option<String> {
+pub(crate) fn extract_opencode_resume_id(args: &[String]) -> Option<String> {
     let idx = args.iter().position(|a| a == "--session")?;
     let candidate = args.get(idx + 1)?;
     if candidate.starts_with("ses_") {
@@ -219,8 +232,8 @@ impl SessionManager {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
-        let launch_ts = now.as_secs() as i64;
-        let launch_ts_ms = now.as_millis() as i64;
+        let launch_ts = i64::try_from(now.as_secs()).unwrap_or(i64::MAX);
+        let launch_ts_ms = i64::try_from(now.as_millis()).unwrap_or(i64::MAX);
 
         // If task_id is set, look up the task's worktree_path and use it for both
         // the PTY cwd and the session's denormalized worktree_path. This keeps task
@@ -304,26 +317,39 @@ impl SessionManager {
         // as Codex. Polling runs against the session's actual cwd (task worktree
         // when applicable), not the project root — that's what OpenCode stores
         // in `session.directory`.
+        //
+        // The DB connection is opened once and reused across the 10 polling
+        // ticks: each tick is one `query_row`, not a full open/close cycle.
+        // If the DB doesn't exist yet (OpenCode hasn't written it), we retry
+        // opening on subsequent ticks until either success or timeout.
         if is_opencode && opencode_resume_id.is_none() {
             let db = self.db.clone();
             let wd = pty_cwd.to_string();
             std::thread::spawn(move || {
+                let Some(db_path) = opencode_db_path() else {
+                    log::warn!("Could not locate OpenCode DB for pty {}", pty_id);
+                    return;
+                };
+                let mut conn: Option<Connection> = None;
                 for _ in 0..10 {
                     std::thread::sleep(std::time::Duration::from_millis(500));
-                    if let Some(session_id) = read_opencode_session_id(&wd, launch_ts_ms) {
+                    if conn.is_none() {
+                        conn = open_opencode_db(&db_path);
+                    }
+                    let Some(c) = conn.as_ref() else { continue };
+                    if let Some(session_id) = query_opencode_session_id(c, &wd, launch_ts_ms) {
                         if let Err(e) = db.update_agent_session_id(pty_id, &session_id) {
-                            log::warn!("Failed to save OpenCode session ID: {}", e);
+                            log::warn!("failed to save opencode session id: {}", e);
                         } else {
                             log::info!(
-                                "Captured OpenCode session ID: {} for pty {}",
-                                session_id,
+                                "captured opencode session id for pty {}",
                                 pty_id
                             );
                         }
                         return;
                     }
                 }
-                log::warn!("Could not capture OpenCode session ID for pty {} after 5s", pty_id);
+                log::warn!("could not capture opencode session id for pty {} after 5s", pty_id);
             });
         }
 
@@ -533,6 +559,39 @@ mod opencode_session_id_tests {
         ]);
         let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
         assert!(id.is_none(), "expected None for ID without ses_ prefix");
+    }
+
+    #[test]
+    fn rejects_control_chars_in_id() {
+        // Security guard: even with a valid ses_ prefix and length, an ID
+        // with embedded control chars (ANSI, newlines) must not leak through
+        // to logs or the frontend.
+        let poisoned = "ses_\x1b[31mpwn\n";
+        let (path, _guard) = fixture_db(&[(poisoned, "/tmp/proj", 1_000)]);
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert!(id.is_none(), "expected None for ID with control characters");
+    }
+
+    #[test]
+    fn returns_none_on_corrupt_schema() {
+        // OpenCode DB exists but doesn't have the expected `session` table.
+        // This is the most realistic failure mode — a version mismatch or
+        // a user deleting table rows. Must degrade gracefully.
+        let path = std::env::temp_dir().join(format!(
+            "opencode-corrupt-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE unrelated (x INTEGER);")
+            .unwrap();
+        drop(conn);
+        let _guard = TempFile(path.clone());
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert!(id.is_none(), "expected None when `session` table missing");
     }
 
     #[test]
