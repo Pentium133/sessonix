@@ -41,6 +41,59 @@ pub fn read_codex_thread_id(working_dir: &str, not_before_secs: i64) -> Option<S
     Some(id)
 }
 
+/// Default location of OpenCode's SQLite database.
+///
+/// OpenCode uses XDG paths on all platforms (confirmed macOS 1.4.3),
+/// so `$HOME/.local/share/opencode/opencode.db` — not
+/// `~/Library/Application Support`.
+pub fn opencode_db_path() -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    Some(home.join(".local").join("share").join("opencode").join("opencode.db"))
+}
+
+/// Read the most recent OpenCode session ID for `working_dir`, created at or
+/// after `not_before_millis` (Unix timestamp in milliseconds — OpenCode stores
+/// `time_created` in ms, not seconds).
+///
+/// Returns `None` when the DB is absent, query fails, or no matching session
+/// exists. Guards against absurdly long IDs (>256 chars) and records missing
+/// the `ses_` prefix to avoid picking up corrupted or unrelated rows.
+#[allow(dead_code)] // Wired into create_session in Phase 5
+pub fn read_opencode_session_id(working_dir: &str, not_before_millis: i64) -> Option<String> {
+    let db_path = opencode_db_path()?;
+    read_opencode_session_id_from_path(&db_path, working_dir, not_before_millis)
+}
+
+/// Path-parametrised variant for tests. Production code should call
+/// `read_opencode_session_id` which supplies the default DB path.
+pub fn read_opencode_session_id_from_path(
+    db_path: &std::path::Path,
+    working_dir: &str,
+    not_before_millis: i64,
+) -> Option<String> {
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let id: String = conn
+        .query_row(
+            "SELECT id FROM session \
+             WHERE directory = ?1 AND time_created >= ?2 \
+             ORDER BY time_created DESC LIMIT 1",
+            rusqlite::params![working_dir, not_before_millis],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if id.len() > 256 || !id.starts_with("ses_") {
+        return None;
+    }
+    Some(id)
+}
+
 pub struct CreateSessionParams<'a> {
     pub command: &'a str,
     pub args: &'a [String],
@@ -317,5 +370,118 @@ mod task_worktree_resolution_tests {
         let (wt, bc) = mgr.resolve_task_worktree(Some(task_id));
         assert!(wt.is_none());
         assert!(bc.is_none());
+    }
+}
+
+#[cfg(test)]
+mod opencode_session_id_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+
+    /// Build a temp path + create a throwaway on-disk SQLite with OpenCode's
+    /// real `session` schema (subset we query), populated with `rows`.
+    ///
+    /// Returns `(path, _guard)` — the guard deletes the file on drop.
+    fn fixture_db(rows: &[(&str, &str, i64)]) -> (PathBuf, TempFile) {
+        let path = std::env::temp_dir().join(format!(
+            "opencode-test-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let conn = Connection::open(&path).expect("open fixture db");
+        conn.execute_batch(
+            "CREATE TABLE session (
+                id TEXT PRIMARY KEY,
+                directory TEXT NOT NULL,
+                time_created INTEGER NOT NULL
+            );",
+        )
+        .expect("create table");
+        for (id, dir, ts) in rows {
+            conn.execute(
+                "INSERT INTO session (id, directory, time_created) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, dir, ts],
+            )
+            .expect("insert fixture row");
+        }
+        drop(conn);
+        (path.clone(), TempFile(path))
+    }
+
+    struct TempFile(PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn returns_none_when_db_missing() {
+        let path = PathBuf::from("/nonexistent/opencode-does-not-exist.db");
+        let id = read_opencode_session_id_from_path(&path, "/tmp", 0);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn returns_most_recent_matching_session() {
+        let (path, _guard) = fixture_db(&[
+            ("ses_oldMatching", "/tmp/proj", 1_000),
+            ("ses_newMatching", "/tmp/proj", 2_000),
+            ("ses_otherDir", "/tmp/other", 3_000),
+        ]);
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert_eq!(id.as_deref(), Some("ses_newMatching"));
+    }
+
+    #[test]
+    fn respects_timestamp_guard() {
+        let (path, _guard) = fixture_db(&[
+            ("ses_stale", "/tmp/proj", 500),
+            ("ses_fresh", "/tmp/proj", 1_500),
+        ]);
+        // Cutoff between the two — only "fresh" qualifies.
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 1_000);
+        assert_eq!(id.as_deref(), Some("ses_fresh"));
+    }
+
+    #[test]
+    fn filters_by_directory() {
+        let (path, _guard) = fixture_db(&[
+            ("ses_wrongDir", "/tmp/other", 2_000),
+        ]);
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn rejects_oversized_id() {
+        let huge = format!("ses_{}", "x".repeat(300));
+        let (path, _guard) = fixture_db(&[(&huge, "/tmp/proj", 1_000)]);
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert!(id.is_none(), "expected None for id longer than 256 chars");
+    }
+
+    #[test]
+    fn rejects_non_ses_prefix() {
+        let (path, _guard) = fixture_db(&[
+            ("corrupted_not_ses", "/tmp/proj", 1_000),
+        ]);
+        let id = read_opencode_session_id_from_path(&path, "/tmp/proj", 0);
+        assert!(id.is_none(), "expected None for ID without ses_ prefix");
+    }
+
+    #[test]
+    fn default_path_points_into_xdg_share() {
+        // Sanity: default path ends with the expected suffix on any platform.
+        let p = opencode_db_path().expect("home dir available in test env");
+        let s = p.to_string_lossy();
+        assert!(
+            s.ends_with(".local/share/opencode/opencode.db"),
+            "unexpected default opencode db path: {s}"
+        );
     }
 }
