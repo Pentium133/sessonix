@@ -1,6 +1,6 @@
+use parking_lot::Mutex;
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -13,6 +13,10 @@ pub struct ProjectRow {
     pub path: String,
 }
 
+/// Full row of the `sessions` table. Some fields are selected for schema
+/// completeness but not currently read by any caller; removing them would
+/// reshape the struct every time a new consumer needs a previously-ignored
+/// column.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SessionRow {
@@ -100,7 +104,7 @@ impl Db {
     }
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(
             "
@@ -243,7 +247,7 @@ impl Db {
     // --- Projects ---
 
     pub fn insert_project(&self, name: &str, path: &str) -> Result<i64, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT OR IGNORE INTO projects (name, path) VALUES (?1, ?2)",
             params![name, path],
@@ -258,7 +262,7 @@ impl Db {
     }
 
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, path FROM projects ORDER BY created_at DESC",
         )?;
@@ -274,9 +278,8 @@ impl Db {
         Ok(rows)
     }
 
-    #[allow(dead_code)]
     pub fn find_project_id_by_path(&self, path: &str) -> Result<Option<i64>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT id FROM projects WHERE path = ?1")?;
         let mut rows = stmt.query(params![path])?;
         match rows.next()? {
@@ -286,7 +289,7 @@ impl Db {
     }
 
     pub fn delete_project(&self, path: &str) -> Result<(), rusqlite::Error> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
         // Delete sessions by project_id (not working_dir) to avoid cross-project deletion.
         // Sessions go first (they reference tasks via task_id and projects via project_id).
@@ -306,7 +309,7 @@ impl Db {
     }
 
     pub fn delete_session_by_pty_id(&self, pty_id: u32) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("DELETE FROM sessions WHERE pty_id = ?1", params![pty_id])?;
         Ok(())
     }
@@ -314,7 +317,7 @@ impl Db {
     // --- Sessions ---
 
     pub fn insert_session(&self, s: &InsertSession<'_>) -> Result<i64, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let next_order: u32 = conn.query_row(
             "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM sessions WHERE project_id = ?1",
             params![s.project_id],
@@ -334,7 +337,7 @@ impl Db {
                 "new_order must be >= 1".to_string(),
             ));
         }
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
 
         let (old_order, project_id): (u32, i64) = tx.query_row(
@@ -376,14 +379,13 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn update_session_status(
         &self,
         pty_id: u32,
         status: &str,
         exit_code: Option<i32>,
     ) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         if status == "exited" {
             conn.execute(
                 "UPDATE sessions SET status = ?1, exit_code = ?2, ended_at = datetime('now') WHERE pty_id = ?3",
@@ -398,12 +400,12 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn list_sessions_for_project(
         &self,
         project_id: i64,
     ) -> Result<Vec<SessionRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, pty_id, agent_type, task_name, working_dir,
                     status, status_line, exit_code, launch_command, launch_args,
@@ -443,7 +445,7 @@ impl Db {
     /// Set sort_order directly without shifting other sessions.
     /// Used when replacing a session (relaunch) to inherit the old position.
     pub fn set_sort_order(&self, pty_id: u32, sort_order: u32) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "UPDATE sessions SET sort_order = ?1 WHERE pty_id = ?2",
             params![sort_order, pty_id],
@@ -456,7 +458,7 @@ impl Db {
         pty_id: u32,
         agent_session_id: &str,
     ) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let rows = conn.execute(
             "UPDATE sessions SET agent_session_id = ?1 WHERE pty_id = ?2",
             params![agent_session_id, pty_id],
@@ -468,7 +470,7 @@ impl Db {
     }
 
     pub fn clear_worktree_path(&self, pty_id: u32) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "UPDATE sessions SET worktree_path = NULL, base_commit = NULL WHERE pty_id = ?1",
             params![pty_id],
@@ -477,7 +479,7 @@ impl Db {
     }
 
     pub fn save_scrollback(&self, pty_id: u32, data: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "UPDATE sessions SET scrollback = ?1 WHERE pty_id = ?2",
             params![data, pty_id],
@@ -486,7 +488,7 @@ impl Db {
     }
 
     pub fn get_scrollback(&self, pty_id: u32) -> Result<Option<String>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.query_row(
             "SELECT scrollback FROM sessions WHERE pty_id = ?1",
             params![pty_id],
@@ -495,7 +497,7 @@ impl Db {
     }
 
     pub fn max_pty_id(&self) -> Result<u32, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let max: Option<u32> = conn.query_row(
             "SELECT MAX(pty_id) FROM sessions",
             [],
@@ -509,7 +511,7 @@ impl Db {
         &self,
         project_path: &str,
     ) -> Result<Vec<SessionRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT s.id, s.project_id, s.pty_id, s.agent_type, s.task_name, s.working_dir,
                     s.status, s.status_line, s.exit_code, s.launch_command, s.launch_args,
@@ -560,7 +562,7 @@ impl Db {
         worktree_path: Option<&str>,
         base_commit: Option<&str>,
     ) -> Result<i64, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO tasks (project_id, name, branch, worktree_path, base_commit)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -574,7 +576,7 @@ impl Db {
         &self,
         project_path: &str,
     ) -> Result<Vec<TaskRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.project_id, t.name, t.branch, t.worktree_path, t.base_commit, t.created_at
              FROM tasks t
@@ -600,7 +602,7 @@ impl Db {
 
     /// Fetch a single task by id. Returns None if not found.
     pub fn get_task_by_id(&self, task_id: i64) -> Result<Option<TaskRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, name, branch, worktree_path, base_commit, created_at
              FROM tasks WHERE id = ?1",
@@ -625,7 +627,7 @@ impl Db {
         &self,
         task_id: i64,
     ) -> Result<Vec<SessionRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, project_id, pty_id, agent_type, task_name, working_dir,
                     status, status_line, exit_code, launch_command, launch_args,
@@ -665,7 +667,7 @@ impl Db {
     /// Delete a task and all its sessions in a single transaction.
     /// Note: PTY processes must be killed BEFORE calling this (see lib.rs::delete_task).
     pub fn delete_task(&self, task_id: i64) -> Result<(), rusqlite::Error> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM sessions WHERE task_id = ?1", params![task_id])?;
         tx.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
@@ -683,7 +685,7 @@ impl Db {
         initial_prompt: Option<&str>,
         skip_permissions: bool,
     ) -> Result<i64, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO templates (name, project_path, agent, initial_prompt, skip_permissions)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -693,7 +695,7 @@ impl Db {
     }
 
     pub fn list_templates(&self, project_path: &str) -> Result<Vec<TemplateRow>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, project_path, agent, initial_prompt, skip_permissions, created_at
              FROM templates WHERE project_path = ?1 ORDER BY name ASC",
@@ -715,7 +717,7 @@ impl Db {
     }
 
     pub fn delete_template(&self, id: i64) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute("DELETE FROM templates WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -728,7 +730,7 @@ impl Db {
         initial_prompt: Option<&str>,
         skip_permissions: bool,
     ) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "UPDATE templates SET name = ?1, agent = ?2, initial_prompt = ?3, skip_permissions = ?4 WHERE id = ?5",
             params![name, agent, initial_prompt, skip_permissions as i32, id],
@@ -739,7 +741,7 @@ impl Db {
     // --- Settings ---
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
         let mut rows = stmt.query(params![key])?;
         match rows.next()? {
@@ -749,7 +751,7 @@ impl Db {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -759,7 +761,7 @@ impl Db {
     }
 
     pub fn get_all_settings(&self) -> Result<Vec<(String, String)>, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key ASC")?;
         let rows = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -768,7 +770,7 @@ impl Db {
     }
 
     pub fn mark_all_running_as_exited(&self) -> Result<usize, rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock();
         let count = conn.execute(
             "UPDATE sessions SET status = 'exited', ended_at = datetime('now') WHERE status = 'running'",
             [],

@@ -3,30 +3,34 @@ use crate::ring_buffer::RingBuffer;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter};
 
 const RING_BUFFER_SIZE: usize = 1024 * 1024; // 1MB per session
 
-#[allow(dead_code)]
 pub struct PtySession {
+    /// PTY id; retained in the struct so reader threads and diagnostics can
+    /// refer back to the session that owns them even though no external
+    /// caller reads the field directly.
+    #[allow(dead_code)]
     pub id: u32,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     _reader_handle: Mutex<Option<JoinHandle<()>>>,
-    pub is_attached: Arc<AtomicBool>,
-    pub ring_buffer: Arc<Mutex<RingBuffer>>,
-    pub last_lines: Arc<Mutex<VecDeque<String>>>,
+    is_attached: Arc<AtomicBool>,
+    ring_buffer: Arc<Mutex<RingBuffer>>,
+    last_lines: Arc<Mutex<VecDeque<String>>>,
     /// PID of the spawned shell/agent process (used for foreground process detection)
     pub shell_pid: Option<u32>,
 }
 
 impl PtySession {
     pub fn write_input(&self, data: &[u8]) -> Result<(), AppError> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         writer
             .write_all(data)
             .map_err(|e| AppError::Pty(format!("write failed: {}", e)))?;
@@ -39,7 +43,6 @@ impl PtySession {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), AppError> {
         self.master
             .lock()
-            .unwrap()
             .resize(PtySize {
                 rows,
                 cols,
@@ -51,23 +54,45 @@ impl PtySession {
     }
 
     pub fn kill(&self) -> Result<(), AppError> {
-        let mut child = self.child.lock().unwrap();
+        let mut child = self.child.lock();
         child
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn try_wait(&self) -> Option<u32> {
-        let mut child = self.child.lock().unwrap();
-        child.try_wait().ok().flatten().map(|s| {
-            if s.success() {
-                0
-            } else {
-                s.exit_code()
-            }
-        })
+    /// Mark the session as detached and discard any buffered output.
+    ///
+    /// The ring buffer only matters to a UI that's about to reattach, so the
+    /// data already streamed via `pty-output` events is dropped here. The
+    /// reader thread keeps writing into the (now-empty) buffer until the next
+    /// attach returns it via `attach_and_drain`.
+    pub fn detach(&self) {
+        self.is_attached.store(false, Ordering::Relaxed);
+        self.ring_buffer.lock().drain();
+    }
+
+    /// Mark the session as attached. If it was detached, return the bytes
+    /// buffered since detach so the caller can replay them into its terminal.
+    ///
+    /// Idempotent: attaching an already-attached session returns an empty
+    /// vector without touching the ring buffer (data has already been
+    /// streamed via `pty-output` events).
+    pub fn attach_and_drain(&self) -> Vec<u8> {
+        let was_detached = !self.is_attached.load(Ordering::Relaxed);
+        let buffered = if was_detached {
+            self.ring_buffer.lock().drain()
+        } else {
+            Vec::new()
+        };
+        self.is_attached.store(true, Ordering::Relaxed);
+        buffered
+    }
+
+    /// Clone the ring of the most recent terminal lines (used by status
+    /// adapters that pattern-match on output tails).
+    pub fn snapshot_last_lines(&self) -> Vec<String> {
+        self.last_lines.lock().iter().cloned().collect()
     }
 
     /// Check if the shell/agent is idle by comparing the PTY's foreground process group
@@ -76,7 +101,7 @@ impl PtySession {
     #[cfg(unix)]
     pub fn is_foreground_idle(&self) -> Option<bool> {
         let shell_pid = self.shell_pid?;
-        let fg_pgid = self.master.lock().unwrap().process_group_leader()?;
+        let fg_pgid = self.master.lock().process_group_leader()?;
         // `pid_t` is i32; guard against unexpected negative values before widening to u32.
         if fg_pgid <= 0 {
             return None;
@@ -215,7 +240,7 @@ impl PtyManager {
                         let data = &buf[..n];
 
                         // Always write to ring buffer
-                        rb.lock().unwrap().write(data);
+                        rb.lock().write(data);
 
                         // Update last_lines for status extraction
                         let text = String::from_utf8_lossy(data);
@@ -231,7 +256,7 @@ impl PtyManager {
                         // Split on both \n and \r so carriage-return-only redraws
                         // are processed rather than accumulated.
                         if partial_line.contains('\n') || partial_line.contains('\r') {
-                            let mut lines = ll.lock().unwrap();
+                            let mut lines = ll.lock();
                             for line in partial_line.split(['\n', '\r']) {
                                 if !line.is_empty() {
                                     lines.push_back(line.to_string());
@@ -275,41 +300,30 @@ impl PtyManager {
             shell_pid,
         });
 
-        self.sessions.lock().unwrap().insert(id, session);
+        self.sessions.lock().insert(id, session);
         Ok(id)
     }
 
     pub fn get_session(&self, id: u32) -> Result<Arc<PtySession>, AppError> {
         self.sessions
             .lock()
-            .unwrap()
             .get(&id)
             .cloned()
             .ok_or(AppError::SessionNotFound(id))
     }
 
-    #[allow(dead_code)]
-    pub fn remove_session(&self, id: u32) -> Option<Arc<PtySession>> {
-        self.sessions.lock().unwrap().remove(&id)
-    }
-
-    #[allow(dead_code)]
-    pub fn session_ids(&self) -> Vec<u32> {
-        self.sessions.lock().unwrap().keys().cloned().collect()
-    }
-
     pub fn session_count(&self) -> usize {
-        self.sessions.lock().unwrap().len()
+        self.sessions.lock().len()
     }
 
     pub fn running_count(&self) -> u32 {
-        self.sessions.lock().unwrap().len() as u32
+        self.sessions.lock().len() as u32
     }
 }
 
 impl Drop for PtyManager {
     fn drop(&mut self) {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock();
         for (_, session) in sessions.iter() {
             let _ = session.kill();
         }

@@ -239,15 +239,6 @@ impl SessionManager {
         }
     }
 
-    pub fn list_sessions_for_project(
-        &self,
-        project_path: &str,
-    ) -> Result<Vec<crate::db::SessionRow>, AppError> {
-        self.db
-            .list_sessions_by_project_path(project_path)
-            .map_err(|e| AppError::Db(e.to_string()))
-    }
-
     /// Resolve a task's worktree path and base commit by id. Returns
     /// (None, None) when task_id is None or the task row is missing.
     /// Extracted so it can be exercised without spawning a PTY.

@@ -7,7 +7,9 @@ use std::path::PathBuf;
 
 const HOOK_COMMAND: &str = "bash ~/.sessonix/hook-handler.sh";
 
-/// Hook status file written by hook-handler.sh
+/// Hook status file written by hook-handler.sh. Fields are deserialized from
+/// JSON produced by an external process; some are retained for future
+/// consumers even though no code currently reads them.
 #[derive(Deserialize, Debug)]
 #[allow(dead_code)]
 pub struct HookStatus {

@@ -12,11 +12,20 @@ pub enum AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::Pty(msg) => write!(f, "PTY error: {}", msg),
-            AppError::Db(msg) => write!(f, "Database error: {}", msg),
-            AppError::SessionNotFound(id) => write!(f, "Session {} not found", id),
-            AppError::AdapterNotFound(name) => write!(f, "Agent adapter '{}' not found", name),
-            AppError::Io(e) => write!(f, "IO error: {}", e),
+            AppError::Pty(msg) => write!(f, "pty: {msg}"),
+            AppError::Db(msg) => write!(f, "db: {msg}"),
+            AppError::SessionNotFound(id) => write!(f, "session {id} not found"),
+            AppError::AdapterNotFound(name) => write!(f, "agent adapter '{name}' not found"),
+            AppError::Io(e) => write!(f, "io: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AppError::Io(e) => Some(e),
+            _ => None,
         }
     }
 }
