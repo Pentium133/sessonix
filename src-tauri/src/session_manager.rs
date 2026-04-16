@@ -649,4 +649,25 @@ mod extract_opencode_resume_id_tests {
         let a = args(&["--session"]);
         assert!(extract_opencode_resume_id(&a).is_none());
     }
+
+    #[test]
+    fn finds_session_id_in_fork_args() {
+        // Fork path from useSessionActions.handleForkSession:
+        // ["--fork", "--session", "ses_fork_abc"]. Keyword search must still
+        // locate the ID even with --fork ahead of --session.
+        let a = args(&["--fork", "--session", "ses_fork_abc"]);
+        assert_eq!(
+            extract_opencode_resume_id(&a).as_deref(),
+            Some("ses_fork_abc"),
+        );
+    }
+
+    #[test]
+    fn ignores_short_session_flag() {
+        // Backend contract: we only parse --session (long form). If `-s ses_x`
+        // ever reaches the adapter (e.g. via Extra Args), we deliberately do
+        // NOT treat it as a resume ID — document that here.
+        let a = args(&["-s", "ses_short"]);
+        assert!(extract_opencode_resume_id(&a).is_none());
+    }
 }

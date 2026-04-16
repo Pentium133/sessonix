@@ -22,17 +22,19 @@ impl AgentAdapter for OpenCodeAdapter {
         // for our PTY-attached session. Prompt must be passed via `--prompt`,
         // because a positional arg is interpreted as the `project` path.
         //
-        // Resume flags (`--session` / `--continue` / short aliases) come first
-        // so flag+value stays contiguous; extra `--fork` also lives in
-        // extra_args when the frontend asks for a fork.
+        // Resume flags (`--session` / `--continue` / `--fork`) come first so
+        // flag+value stays contiguous. Only long-form flags are matched — the
+        // short forms (`-s` / `-c`) are intentionally NOT detected here:
+        // `extract_opencode_resume_id` also only parses `--session`, and the
+        // frontend only ever emits long forms. Matching short forms here
+        // would create drift (e.g. `-s ses_x` in Extra Args would route as
+        // resume but never get stored as the session ID).
         let mut args: Vec<String> = Vec::new();
 
-        let has_resume_flag = config.extra_args.iter().any(|a| {
-            matches!(
-                a.as_str(),
-                "--session" | "-s" | "--continue" | "-c" | "--fork"
-            )
-        });
+        let has_resume_flag = config
+            .extra_args
+            .iter()
+            .any(|a| matches!(a.as_str(), "--session" | "--continue" | "--fork"));
 
         if has_resume_flag {
             args.extend(config.extra_args.clone());
@@ -51,7 +53,7 @@ impl AgentAdapter for OpenCodeAdapter {
     fn extract_status(&self, last_lines: &[String]) -> AgentStatus {
         // Walk lines in reverse to find the most recent status indicator.
         //
-        // OpenCode `run` emits tool-call markers with Unicode prefixes:
+        // OpenCode emits tool-call markers with Unicode prefixes:
         //   →  read  (U+2192)
         //   ←  edit  (U+2190)
         //   $  bash  (ASCII; at START of line — distinct from EOL shell prompt)
@@ -248,6 +250,42 @@ mod tests {
                 "-d",
             ]
         );
+    }
+
+    #[test]
+    fn test_build_command_short_flags_do_not_trigger_resume_path() {
+        // Regression: short forms `-s` and `-c` must NOT activate has_resume_flag.
+        // extract_opencode_resume_id only parses `--session`, so matching short
+        // forms here would let `-s ses_x` in Extra Args silently skip ID capture.
+        // Also a future `-c <value>` (e.g. custom "config" shorthand) in a NEW
+        // session must not swallow the `--prompt` that belongs to that session.
+        let adapter = OpenCodeAdapter;
+        let config = LaunchConfig {
+            working_dir: "/tmp".to_string(),
+            prompt: Some("hi".to_string()),
+            extra_args: vec!["-c".to_string(), "some-value".to_string()],
+        };
+        let (_, args, _) = adapter.build_command(&config);
+        // Expected: prompt FIRST (new-session path), extra_args AFTER.
+        assert_eq!(args, vec!["--prompt", "hi", "-c", "some-value"]);
+    }
+
+    #[test]
+    fn test_build_command_fork_flag_triggers_resume_path() {
+        // When UI forks (`--fork --session <id>`), extra_args carry the --fork.
+        // The adapter must group them before the prompt (even an empty one).
+        let adapter = OpenCodeAdapter;
+        let config = LaunchConfig {
+            working_dir: "/tmp".to_string(),
+            prompt: None,
+            extra_args: vec![
+                "--fork".to_string(),
+                "--session".to_string(),
+                "ses_fork_xyz".to_string(),
+            ],
+        };
+        let (_, args, _) = adapter.build_command(&config);
+        assert_eq!(args, vec!["--fork", "--session", "ses_fork_xyz"]);
     }
 
     #[test]
