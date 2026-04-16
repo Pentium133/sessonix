@@ -26,6 +26,7 @@ export const useTemplateStore = create<TemplateState>((set) => ({
   loaded: false,
 
   load: async (projectPath) => {
+    set({ templates: [], loaded: false });
     try {
       const templates = await listTemplates(projectPath);
       set({ templates, loaded: true });

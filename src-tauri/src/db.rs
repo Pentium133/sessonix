@@ -249,6 +249,7 @@ impl Db {
             "DELETE FROM sessions WHERE project_id = (SELECT id FROM projects WHERE path = ?1)",
             params![path],
         )?;
+        tx.execute("DELETE FROM templates WHERE project_path = ?1", params![path])?;
         tx.execute("DELETE FROM projects WHERE path = ?1", params![path])?;
         tx.commit()?;
         Ok(())

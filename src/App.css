@@ -1040,21 +1040,6 @@ body {
   cursor: not-allowed;
 }
 
-.launcher-save-template {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: calc(var(--space) * 2) calc(var(--space) * 3);
-  color: var(--text-dim);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.launcher-save-template:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 /* Sidebar templates section */
 .sidebar-templates {
   border-top: 1px solid var(--border);

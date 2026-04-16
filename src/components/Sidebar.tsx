@@ -266,9 +266,12 @@ export default function Sidebar() {
                   return;
                 }
                 const text = t.initial_prompt ?? "";
-                if (!text) return;
+                if (!text) {
+                  showToast("Template has no prompt", "error");
+                  return;
+                }
                 const encoder = new TextEncoder();
-                writeToSession(sid, Array.from(encoder.encode(text)))
+                writeToSession(sid, Array.from(encoder.encode(text + "\n")))
                   .then(() => focusTerminal(sid))
                   .catch((err) => showToast(String(err), "error"));
               }}
@@ -284,20 +287,21 @@ export default function Sidebar() {
         isOpen={templateModal.open}
         onClose={() => setTemplateModal({ open: false })}
         initial={templateModal.editing ? { name: templateModal.editing.name, prompt: templateModal.editing.initial_prompt ?? "" } : undefined}
-        onSave={(name, prompt) => {
+        onSave={async (name, prompt) => {
           if (!activeProjectPath) return;
-          if (templateModal.editing) {
-            // Update existing: delete + recreate (simple approach)
-            removeTemplate(templateModal.editing.id)
-              .then(() => addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false }))
-              .then(() => showToast(`Template "${name}" updated`, "success"))
-              .catch((err) => showToast(String(err), "error"));
-          } else {
-            addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false })
-              .then(() => showToast(`Template "${name}" saved`, "success"))
-              .catch((err) => showToast(String(err), "error"));
+          try {
+            if (templateModal.editing) {
+              await removeTemplate(templateModal.editing.id);
+              await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+              showToast(`Template "${name}" updated`, "success");
+            } else {
+              await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+              showToast(`Template "${name}" saved`, "success");
+            }
+            setTemplateModal({ open: false });
+          } catch (err) {
+            showToast(String(err), "error");
           }
-          setTemplateModal({ open: false });
         }}
       />
     </aside>
