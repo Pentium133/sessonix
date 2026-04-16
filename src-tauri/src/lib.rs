@@ -525,15 +525,12 @@ fn task_row_to_info(row: db::TaskRow) -> TaskInfo {
 /// downstream (sanitize_branch is char-by-char, git2 will reject at ~255, etc).
 const TASK_FIELD_MAX_LEN: usize = 200;
 
-#[tauri::command]
-fn create_task(
-    state: tauri::State<'_, SessionManager>,
-    request: CreateTaskRequest,
-) -> Result<TaskInfo, String> {
-    // Early input validation — reject empty or absurdly long fields before
-    // any filesystem or DB work.
-    let name = request.name.trim();
-    let branch_name = request.branch_name.trim();
+/// Trim + length/empty validation for a task creation request.
+/// Pure, side-effect free — extracted so it can be exercised in unit tests
+/// without the full Tauri State + DB setup.
+fn validate_task_fields(name: &str, branch_name: &str) -> Result<(String, String), String> {
+    let name = name.trim().to_string();
+    let branch_name = branch_name.trim().to_string();
     if name.is_empty() {
         return Err("Task name is required".into());
     }
@@ -546,6 +543,17 @@ fn create_task(
     if branch_name.len() > TASK_FIELD_MAX_LEN {
         return Err(format!("Branch name must be ≤{} characters", TASK_FIELD_MAX_LEN));
     }
+    Ok((name, branch_name))
+}
+
+#[tauri::command]
+async fn create_task(
+    state: tauri::State<'_, SessionManager>,
+    request: CreateTaskRequest,
+) -> Result<TaskInfo, String> {
+    // Early input validation — reject empty or absurdly long fields before
+    // any filesystem or DB work.
+    let (name, branch_name) = validate_task_fields(&request.name, &request.branch_name)?;
 
     // Project must already exist (added via add_project). Lookup id first.
     let project_id = state
@@ -554,39 +562,44 @@ fn create_task(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Unknown project path: {}", request.project_path))?;
 
-    // Create the worktree (blocking git2 op). Failure here leaves nothing to clean up.
-    let wt = git_manager::create_worktree(&request.project_path, branch_name)?;
+    // Offload blocking git2 + DB work so the Tauri dispatcher thread stays free.
+    let db = state.db.clone();
+    let project_path = request.project_path;
 
-    // Insert the row. On DB failure, compensate by removing the worktree we just created.
-    let task_id = match state.db.insert_task(
-        project_id,
-        name,
-        Some(&wt.branch),
-        Some(&wt.path),
-        Some(&wt.base_commit),
-    ) {
-        Ok(id) => id,
-        Err(e) => {
-            let _ = git_manager::remove_worktree(&wt.path);
-            return Err(format!("Failed to persist task: {}", e));
-        }
-    };
+    tauri::async_runtime::spawn_blocking(move || -> Result<TaskInfo, String> {
+        let wt = git_manager::create_worktree(&project_path, &branch_name)?;
 
-    // Construct TaskInfo directly from known fields + current time — saves a
-    // SELECT round-trip. The DB default matches `SystemTime::now()` to ms precision.
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    Ok(TaskInfo {
-        id: task_id,
-        project_id,
-        name: name.to_string(),
-        branch: Some(wt.branch),
-        worktree_path: Some(wt.path),
-        base_commit: Some(wt.base_commit),
-        created_at,
+        // On DB failure, compensate by removing the worktree we just created.
+        let task_id = match db.insert_task(
+            project_id,
+            &name,
+            Some(&wt.branch),
+            Some(&wt.path),
+            Some(&wt.base_commit),
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = git_manager::remove_worktree(&wt.path);
+                return Err(format!("Failed to persist task: {}", e));
+            }
+        };
+
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        Ok(TaskInfo {
+            id: task_id,
+            project_id,
+            name,
+            branch: Some(wt.branch),
+            worktree_path: Some(wt.path),
+            base_commit: Some(wt.base_commit),
+            created_at,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -610,7 +623,10 @@ struct DeleteTaskResult {
 }
 
 #[tauri::command]
-fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<DeleteTaskResult, String> {
+async fn delete_task(
+    state: tauri::State<'_, SessionManager>,
+    task_id: i64,
+) -> Result<DeleteTaskResult, String> {
     // 1. Look up task to learn its worktree_path.
     let task = state
         .db
@@ -618,8 +634,9 @@ fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Task {} not found", task_id))?;
 
-    // 2. Kill all PTY sessions belonging to this task.
-    //    Silently swallow errors — sessions that already exited return Err from kill_session.
+    // 2. Kill all PTY sessions belonging to this task synchronously —
+    //    these are cheap signal sends, not blocking IO. Must happen with
+    //    access to `state.pty`, before we offload the rest.
     let sessions = state
         .db
         .list_sessions_by_task_id(task_id)
@@ -632,23 +649,31 @@ fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<
         }
     }
 
-    // 3. Remove the worktree (if tracked). Best-effort for missing dirs, but
-    //    surface genuine failures so an orphaned worktree on disk is visible
-    //    to the user (otherwise silent disk leak).
-    let mut worktree_warning: Option<String> = None;
-    if let Some(ref path) = task.worktree_path {
-        if let Err(e) = git_manager::remove_worktree(path) {
-            log::warn!("delete_task {}: worktree cleanup failed at {}: {}", task_id, path, e);
-            worktree_warning = Some(format!("Worktree at {} was not fully removed: {}", path, e));
+    // 3. Offload worktree removal + DB delete to the blocking pool.
+    let db = state.db.clone();
+    let worktree_path = task.worktree_path.clone();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<DeleteTaskResult, String> {
+        // Remove the worktree (if tracked). Best-effort for missing dirs, but
+        // surface genuine failures so an orphaned worktree on disk is visible
+        // to the user (otherwise silent disk leak).
+        let mut worktree_warning: Option<String> = None;
+        if let Some(ref path) = worktree_path {
+            if let Err(e) = git_manager::remove_worktree(path) {
+                log::warn!("delete_task {}: worktree cleanup failed at {}: {}", task_id, path, e);
+                worktree_warning = Some(format!("Worktree at {} was not fully removed: {}", path, e));
+            }
         }
-    }
 
-    // 4. Delete DB rows (sessions first, then task — inside a transaction).
-    //    Done even if worktree cleanup failed: otherwise the task row points
-    //    at a potentially-half-deleted worktree with no way to retry via UI.
-    state.db.delete_task(task_id).map_err(|e| e.to_string())?;
+        // Delete DB rows (sessions first, then task — inside a transaction).
+        // Done even if worktree cleanup failed: otherwise the task row points
+        // at a potentially-half-deleted worktree with no way to retry via UI.
+        db.delete_task(task_id).map_err(|e| e.to_string())?;
 
-    Ok(DeleteTaskResult { worktree_warning })
+        Ok(DeleteTaskResult { worktree_warning })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -869,6 +894,50 @@ mod iso_parse_tests {
         assert_eq!(parse_iso_to_unix_ms("2026-04-16 12:60:00"), 0);
         // Non-numeric garbage in any field
         assert_eq!(parse_iso_to_unix_ms("2026-AA-16 12:00:00"), 0);
+    }
+}
+
+#[cfg(test)]
+mod task_validation_tests {
+    use super::{validate_task_fields, TASK_FIELD_MAX_LEN};
+
+    #[test]
+    fn accepts_trimmed_nonempty_fields() {
+        let (n, b) = validate_task_fields("  fix auth  ", "  feat/auth  ").unwrap();
+        assert_eq!(n, "fix auth");
+        assert_eq!(b, "feat/auth");
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        assert!(validate_task_fields("", "feat/x").is_err());
+        assert!(validate_task_fields("   ", "feat/x").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_branch() {
+        assert!(validate_task_fields("name", "").is_err());
+        assert!(validate_task_fields("name", "   ").is_err());
+    }
+
+    #[test]
+    fn rejects_name_too_long() {
+        let too_long = "a".repeat(TASK_FIELD_MAX_LEN + 1);
+        assert!(validate_task_fields(&too_long, "feat/x").is_err());
+    }
+
+    #[test]
+    fn rejects_branch_too_long() {
+        let too_long = "x".repeat(TASK_FIELD_MAX_LEN + 1);
+        assert!(validate_task_fields("name", &too_long).is_err());
+    }
+
+    #[test]
+    fn accepts_fields_at_max_length() {
+        let at_max = "b".repeat(TASK_FIELD_MAX_LEN);
+        let (n, b) = validate_task_fields(&at_max, &at_max).unwrap();
+        assert_eq!(n.len(), TASK_FIELD_MAX_LEN);
+        assert_eq!(b.len(), TASK_FIELD_MAX_LEN);
     }
 }
 

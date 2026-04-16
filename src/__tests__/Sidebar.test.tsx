@@ -20,7 +20,7 @@ vi.mock("../lib/api", () => ({
   createTask: vi.fn().mockResolvedValue({
     id: 1, projectId: 1, name: "t", branch: null, worktreePath: null, baseCommit: null, createdAt: 0,
   }),
-  deleteTask: vi.fn().mockResolvedValue(undefined),
+  deleteTask: vi.fn().mockResolvedValue({ worktree_warning: null }),
   installClaudeHooks: vi.fn().mockResolvedValue(true),
   checkClaudeHooks: vi.fn().mockResolvedValue(true),
   reorderSession: vi.fn().mockResolvedValue(undefined),
@@ -38,7 +38,8 @@ import Sidebar from "../components/Sidebar";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import { useUiStore } from "../store/uiStore";
-import type { Project, Session } from "../lib/types";
+import { useTaskStore } from "../store/taskStore";
+import type { Project, Session, Task } from "../lib/types";
 import * as git from "../lib/git";
 
 const mockHandleRemoveSession = vi.fn();
@@ -99,6 +100,7 @@ function setupStores(
   sessions: Session[],
   activeSessionId: number | null = null,
   collapsed = false,
+  tasks: Task[] = [],
 ) {
   useProjectStore.setState({ projects, activeProjectPath: projects[0]?.path ?? null });
   useSessionStore.setState({
@@ -107,6 +109,20 @@ function setupStores(
     loaded: true,
   });
   useUiStore.setState({ sidebarCollapsed: collapsed, sidebarWidth: 260 });
+  useTaskStore.setState({ tasks, loaded: true });
+}
+
+function makeTask(overrides: Partial<Task> = {}): Task {
+  return {
+    id: 1,
+    projectId: 1,
+    name: "Task A",
+    branch: "feat/a",
+    worktreePath: "/tmp/app/.sessonix-worktrees/feat-a",
+    baseCommit: "abc",
+    createdAt: 0,
+    ...overrides,
+  };
 }
 
 describe("Sidebar (SessionPanel)", () => {
@@ -179,41 +195,6 @@ describe("Sidebar (SessionPanel)", () => {
     expect(switchSession).toHaveBeenCalledWith(1);
   });
 
-  // These three assertions predate the SessionItem redesign: "Relaunch"/"Kill"
-  // are now icon-only buttons (↻, ×) and "Running"/"Exited" are conveyed via
-  // the status dot, not text. Kept skipped as a reminder to rewrite against
-  // the current DOM if/when Sidebar gets meaningful UX tests again.
-  it.skip("shows Relaunch button for exited sessions", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1, 2] },
-    ];
-    const sessions = makeSessions(2, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Relaunch")).toBeTruthy();
-  });
-
-  it.skip("shows Kill button for running sessions", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1] },
-    ];
-    const sessions = makeSessions(1, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Kill")).toBeTruthy();
-  });
-
-  it.skip("shows status badges", () => {
-    const projects: Project[] = [
-      { path: "/tmp/app", name: "app", sessions: [1, 2] },
-    ];
-    const sessions = makeSessions(2, "/tmp/app");
-    setupStores(projects, sessions);
-    render(<Sidebar />);
-    expect(screen.getByText("Running")).toBeTruthy();
-    expect(screen.getByText("Exited")).toBeTruthy();
-  });
-
   it("shows the worktree tree icon in git header for worktree projects", async () => {
     const projects: Project[] = [
       { path: "/tmp/app", name: "app", sessions: [1] },
@@ -247,6 +228,66 @@ describe("Sidebar (SessionPanel)", () => {
     const activeItem = container.querySelector(".session-card.active");
     expect(activeItem).toBeTruthy();
     expect(activeItem?.textContent).toContain("Session 1");
+  });
+
+  describe("Task grouping", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1, 2] },
+    ];
+
+    it("renders TaskGroup when project has tasks", () => {
+      const sessions = makeSessions(1, "/tmp/app");
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      expect(container.querySelector(".task-group")).toBeTruthy();
+      expect(screen.getByText("Task A")).toBeTruthy();
+      expect(screen.getByText("Tasks")).toBeTruthy();
+    });
+
+    it("renders a grouped session inside its TaskGroup body", () => {
+      const sessions: Session[] = [
+        {
+          ...makeSessions(1, "/tmp/app")[0],
+          id: 1,
+          task_name: "Grouped S",
+          task_id: 1,
+        },
+      ];
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      const body = container.querySelector(".task-group-body");
+      expect(body).toBeTruthy();
+      expect(body?.textContent).toContain("Grouped S");
+    });
+
+    it("renders ungrouped sessions outside task groups", () => {
+      const sessions: Session[] = [
+        { ...makeSessions(1, "/tmp/app")[0], id: 1, task_name: "Loose S", task_id: null },
+      ];
+      setupStores(projects, sessions, null, false, [makeTask()]);
+      const { container } = render(<Sidebar />);
+      const body = container.querySelector(".task-group-body");
+      // task has no sessions → body renders "No sessions yet" placeholder
+      expect(body?.textContent).toContain("No sessions yet");
+      // Ungrouped session should render outside, directly under sessions-list
+      const looseCard = screen
+        .getByText("Loose S")
+        .closest(".session-card");
+      expect(looseCard?.parentElement?.classList.contains("task-group-body")).toBe(false);
+    });
+
+    it("shows empty TaskGroup state when task has no sessions", () => {
+      setupStores(projects, [], null, false, [makeTask()]);
+      render(<Sidebar />);
+      expect(screen.getByText("No sessions yet")).toBeTruthy();
+    });
+
+    it("does not render 'Tasks' header when no tasks exist", () => {
+      const sessions = makeSessions(1, "/tmp/app");
+      setupStores(projects, sessions, null, false, []);
+      render(<Sidebar />);
+      expect(screen.queryByText("Tasks")).toBeNull();
+    });
   });
 
   describe("Kill confirmation", () => {

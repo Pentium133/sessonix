@@ -230,6 +230,13 @@ impl Db {
             )?;
         }
 
+        // Indices for task-aware queries.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_task_id ON sessions(task_id);
+             CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
+             CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);",
+        )?;
+
         Ok(())
     }
 

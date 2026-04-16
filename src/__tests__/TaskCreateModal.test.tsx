@@ -6,7 +6,7 @@ const createTaskMock = vi.fn();
 vi.mock("../lib/api", () => ({
   createTask: (...args: unknown[]) => createTaskMock(...args),
   listTasks: vi.fn().mockResolvedValue([]),
-  deleteTask: vi.fn().mockResolvedValue(undefined),
+  deleteTask: vi.fn().mockResolvedValue({ worktree_warning: null }),
 }));
 
 vi.mock("../components/Toast", () => ({
@@ -15,10 +15,12 @@ vi.mock("../components/Toast", () => ({
 
 import TaskCreateModal from "../components/TaskCreateModal";
 import { useTaskStore } from "../store/taskStore";
+import { showToast } from "../components/Toast";
 
 describe("TaskCreateModal", () => {
   beforeEach(() => {
     createTaskMock.mockReset();
+    vi.mocked(showToast).mockClear();
     useTaskStore.setState({ tasks: [], loaded: true });
   });
 
@@ -84,5 +86,24 @@ describe("TaskCreateModal", () => {
     render(<TaskCreateModal projectPath="/repo" onClose={onClose} />);
     const btn = screen.getByText("Create Task") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+  });
+
+  it("shows error toast and keeps modal open on createTask rejection", async () => {
+    createTaskMock.mockRejectedValueOnce(new Error("git failed"));
+    const onClose = vi.fn();
+
+    render(<TaskCreateModal projectPath="/repo" onClose={onClose} />);
+    fireEvent.change(screen.getByPlaceholderText(/Task name/i), {
+      target: { value: "Broken task" },
+    });
+    fireEvent.click(screen.getByText("Create Task"));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(vi.mocked(showToast).mock.calls[0][0]).toMatch(/Failed to create task/);
+    expect(vi.mocked(showToast).mock.calls[0][1]).toBe("error");
+    expect(onClose).not.toHaveBeenCalled();
+    // Button should be re-enabled after failure so user can retry
+    const btn = screen.getByText("Create Task") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 });
