@@ -17,23 +17,28 @@ impl AgentAdapter for OpenCodeAdapter {
         &self,
         config: &LaunchConfig,
     ) -> (String, Vec<String>, HashMap<String, String>) {
-        // Always start with the `run --quiet` subcommand for headless, PTY-friendly
-        // output (no Bubble Tea TUI, no spinner).
-        let mut args = vec!["run".to_string(), "--quiet".to_string()];
+        // Bare `opencode` launches the interactive TUI (the `[default]` command).
+        // `opencode run` is batch-only and exits after one message — unusable
+        // for our PTY-attached session. Prompt must be passed via `--prompt`,
+        // because a positional arg is interpreted as the `project` path.
+        //
+        // Resume flags (`--session` / `--continue` / short aliases) come first
+        // so flag+value stays contiguous; extra `--fork` also lives in
+        // extra_args when the frontend asks for a fork.
+        let mut args: Vec<String> = Vec::new();
 
-        // If extra_args carries a resume flag (`--session` or `--continue`),
-        // splice it in before the prompt so flag+value stays contiguous and
-        // reaches `opencode run` in CLI-correct order — regardless of where in
-        // extra_args the flag appears. Otherwise prompt comes first.
-        let has_resume_flag = config
-            .extra_args
-            .iter()
-            .any(|a| matches!(a.as_str(), "--session" | "--continue"));
+        let has_resume_flag = config.extra_args.iter().any(|a| {
+            matches!(
+                a.as_str(),
+                "--session" | "-s" | "--continue" | "-c" | "--fork"
+            )
+        });
 
         if has_resume_flag {
             args.extend(config.extra_args.clone());
         }
         if let Some(ref prompt) = config.prompt {
+            args.push("--prompt".to_string());
             args.push(prompt.clone());
         }
         if !has_resume_flag {
@@ -46,7 +51,7 @@ impl AgentAdapter for OpenCodeAdapter {
     fn extract_status(&self, last_lines: &[String]) -> AgentStatus {
         // Walk lines in reverse to find the most recent status indicator.
         //
-        // OpenCode `run --quiet` emits tool-call markers with Unicode prefixes:
+        // OpenCode `run` emits tool-call markers with Unicode prefixes:
         //   →  read  (U+2192)
         //   ←  edit  (U+2190)
         //   $  bash  (ASCII; at START of line — distinct from EOL shell prompt)
@@ -134,7 +139,7 @@ mod tests {
         };
         let (cmd, args, env) = adapter.build_command(&config);
         assert_eq!(cmd, "opencode");
-        assert_eq!(args, vec!["run", "--quiet", "fix the auth bug"]);
+        assert_eq!(args, vec!["--prompt", "fix the auth bug"]);
         assert!(env.is_empty());
     }
 
@@ -148,7 +153,7 @@ mod tests {
         };
         let (cmd, args, _env) = adapter.build_command(&config);
         assert_eq!(cmd, "opencode");
-        assert_eq!(args, vec!["run", "--quiet"]);
+        assert!(args.is_empty());
     }
 
     #[test]
@@ -167,10 +172,9 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "run",
-                "--quiet",
                 "--session",
                 "ses_3cf7dd8d4ffeUPfENpVxfFojZ2",
+                "--prompt",
                 "continue the work",
             ]
         );
@@ -186,15 +190,15 @@ mod tests {
         };
         let (cmd, args, _env) = adapter.build_command(&config);
         assert_eq!(cmd, "opencode");
-        assert_eq!(args, vec!["run", "--quiet", "--continue", "next task"]);
+        assert_eq!(args, vec!["--continue", "--prompt", "next task"]);
     }
 
     #[test]
     fn test_build_command_resume_flag_not_first() {
         // Regression: frontend may pass extra flags ahead of --session, e.g.
-        // `opencode run --quiet --model foo --session ses_x prompt`. The
-        // adapter must still group extra_args before prompt so flag+value
-        // stays together.
+        // `opencode --model foo --session ses_x --prompt "..."`. The adapter
+        // must still group extra_args before prompt so flag+value stays
+        // together (`--session` must be followed by its value).
         let adapter = OpenCodeAdapter;
         let config = LaunchConfig {
             working_dir: "/tmp".to_string(),
@@ -210,12 +214,11 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "run",
-                "--quiet",
                 "--model",
                 "foo",
                 "--session",
                 "ses_xyz",
+                "--prompt",
                 "continue",
             ]
         );
@@ -238,8 +241,7 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "run",
-                "--quiet",
+                "--prompt",
                 "refactor",
                 "--model",
                 "anthropic/claude-sonnet-4-5",

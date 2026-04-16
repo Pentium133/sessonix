@@ -224,7 +224,7 @@ describe("SessionLauncher", () => {
       expect(screen.queryByText("Claude Options")).toBeNull();
     });
 
-    it("launches opencode with run --quiet for New mode (no prompt)", () => {
+    it("launches opencode with empty args for New mode (no prompt, TUI)", () => {
       const onLaunch = vi.fn();
       render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
       fireEvent.click(screen.getByText("opencode"));
@@ -232,13 +232,13 @@ describe("SessionLauncher", () => {
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "opencode",
-          args: ["run", "--quiet"],
+          args: [],
           agent_type: "opencode",
         })
       );
     });
 
-    it("appends prompt as positional arg for New mode", () => {
+    it("passes prompt via --prompt flag for New mode", () => {
       const onLaunch = vi.fn();
       render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
       fireEvent.click(screen.getByText("opencode"));
@@ -248,13 +248,13 @@ describe("SessionLauncher", () => {
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "opencode",
-          args: ["run", "--quiet", "what is 2+2?"],
+          args: ["--prompt", "what is 2+2?"],
           agent_type: "opencode",
         })
       );
     });
 
-    it("launches opencode with run --quiet --continue for Last mode", () => {
+    it("launches opencode with --continue for Last mode", () => {
       const onLaunch = vi.fn();
       render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
       fireEvent.click(screen.getByText("opencode"));
@@ -266,13 +266,13 @@ describe("SessionLauncher", () => {
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "opencode",
-          args: ["run", "--quiet", "--continue"],
+          args: ["--continue"],
           agent_type: "opencode",
         })
       );
     });
 
-    it("launches opencode with run --quiet --session <id> for Resume mode", () => {
+    it("launches opencode with --session <id> for Resume mode", () => {
       const onLaunch = vi.fn();
       render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
       fireEvent.click(screen.getByText("opencode"));
@@ -286,7 +286,7 @@ describe("SessionLauncher", () => {
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({
           command: "opencode",
-          args: ["run", "--quiet", "--session", "ses_abc123"],
+          args: ["--session", "ses_abc123"],
           agent_type: "opencode",
         })
       );

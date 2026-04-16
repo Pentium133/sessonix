@@ -219,12 +219,12 @@ describe("useSessionActions", () => {
       expect(call.args).toEqual(["--model", "gemini-pro"]);
     });
 
-    it("uses run --quiet --session <id> for OpenCode with agentSessionId", async () => {
+    it("uses --session <id> for OpenCode with agentSessionId", async () => {
       const session = makeSession({
         id: 1,
         agent_type: "opencode",
         command: "opencode",
-        args: ["run", "--quiet"],
+        args: [],
         agentSessionId: "ses_abc123",
         status: "exited",
       });
@@ -242,15 +242,15 @@ describe("useSessionActions", () => {
       });
 
       const call = vi.mocked(api.createSession).mock.calls[0][0];
-      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_abc123"]);
+      expect(call.args).toEqual(["--session", "ses_abc123"]);
     });
 
-    it("uses run --quiet --continue for OpenCode without agentSessionId", async () => {
+    it("uses --continue for OpenCode without agentSessionId", async () => {
       const session = makeSession({
         id: 1,
         agent_type: "opencode",
         command: "opencode",
-        args: ["run", "--quiet"],
+        args: [],
         agentSessionId: undefined,
         status: "exited",
       });
@@ -268,7 +268,7 @@ describe("useSessionActions", () => {
       });
 
       const call = vi.mocked(api.createSession).mock.calls[0][0];
-      expect(call.args).toEqual(["run", "--quiet", "--continue"]);
+      expect(call.args).toEqual(["--continue"]);
     });
 
     it("drops prompt on OpenCode relaunch (context already on backend)", async () => {
@@ -276,7 +276,7 @@ describe("useSessionActions", () => {
         id: 1,
         agent_type: "opencode",
         command: "opencode",
-        args: ["run", "--quiet", "fix the bug"],
+        args: ["--prompt", "fix the bug"],
         agentSessionId: "ses_xyz",
         initial_prompt: "fix the bug",
         status: "exited",
@@ -295,7 +295,7 @@ describe("useSessionActions", () => {
       });
 
       const call = vi.mocked(api.createSession).mock.calls[0][0];
-      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_xyz"]);
+      expect(call.args).toEqual(["--session", "ses_xyz"]);
       expect(call.args).not.toContain("fix the bug");
     });
 
@@ -304,7 +304,7 @@ describe("useSessionActions", () => {
         id: 1,
         agent_type: "opencode",
         command: "opencode",
-        args: ["run", "--quiet"],
+        args: [],
         agentSessionId: "ses_wt",
         worktree_path: "/tmp/app/.sessonix-worktrees/feat-x",
         base_commit: "abc123",
@@ -324,7 +324,7 @@ describe("useSessionActions", () => {
       });
 
       const call = vi.mocked(api.createSession).mock.calls[0][0];
-      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_wt"]);
+      expect(call.args).toEqual(["--session", "ses_wt"]);
       expect(call.worktree_path).toBe("/tmp/app/.sessonix-worktrees/feat-x");
       expect(call.base_commit).toBe("abc123");
       expect(call.working_dir).toBe("/tmp/app"); // project root, not worktree
@@ -404,7 +404,7 @@ describe("useSessionActions", () => {
       // Should not create a session — just show error
       expect(api.createSession).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(
-        expect.stringContaining("thread ID not yet captured"),
+        expect.stringContaining("session ID not yet captured"),
         "error"
       );
     });
@@ -455,13 +455,39 @@ describe("useSessionActions", () => {
       expect(sessions).toHaveLength(2);
     });
 
-    it("blocks fork for OpenCode (CLI has no fork subcommand)", async () => {
+    it("uses --fork --session <id> for OpenCode with agentSessionId", async () => {
       const session = makeSession({
         id: 1,
         agent_type: "opencode",
         command: "opencode",
-        args: ["run", "--quiet"],
-        agentSessionId: "ses_abc",
+        args: [],
+        agentSessionId: "ses_fork_abc",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+      vi.mocked(api.createSession).mockResolvedValue(64);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleForkSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["--fork", "--session", "ses_fork_abc"]);
+      expect(call.task_name).toBe("Test (fork)");
+    });
+
+    it("shows error toast for OpenCode fork without agentSessionId", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: [],
+        agentSessionId: undefined,
       });
       useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
       useProjectStore.setState({
@@ -477,7 +503,7 @@ describe("useSessionActions", () => {
 
       expect(api.createSession).not.toHaveBeenCalled();
       expect(mockShowToast).toHaveBeenCalledWith(
-        expect.stringContaining("OpenCode does not support forking"),
+        expect.stringContaining("session ID not yet captured"),
         "error"
       );
     });

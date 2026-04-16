@@ -65,15 +65,18 @@ function buildArgs(opts: BuildArgsOptions): string[] {
     return args;
   }
   if (agentType === "opencode") {
-    const args: string[] = ["run", "--quiet"];
+    // Bare `opencode` launches the interactive TUI (the default command).
+    // `opencode run` is batch-only — it exits after one message, so unusable
+    // for a persistent PTY session. Prompt must go through `--prompt` since
+    // a positional arg would be interpreted as the `project` path.
+    const args: string[] = [];
     if (opencodeMode === "resume" && trimmedId) {
       args.push("--session", trimmedId);
     } else if (opencodeMode === "last") {
       args.push("--continue");
     }
-    // For new OpenCode sessions, prompt is passed as positional arg
     if (prompt && opencodeMode === "new") {
-      args.push(prompt);
+      args.push("--prompt", prompt);
     }
     // "new" → session_manager.rs polls OpenCode SQLite to capture session id
     return args;

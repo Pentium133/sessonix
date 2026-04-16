@@ -108,10 +108,10 @@ pub(crate) fn read_opencode_session_id_from_path(
 
 /// Pull the `ses_xxx` OpenCode session ID out of resume-style args.
 ///
-/// Expects args shaped like `["run", "--quiet", "--session", "ses_...", ...]`
-/// (or the same pattern with the flag anywhere in the list). Returns `None`
-/// for `--continue` — in that case the ID is only known after polling, and
-/// callers should not prematurely store a stale value.
+/// Expects args shaped like `["--session", "ses_...", ...]` (the flag may
+/// appear anywhere in the list). Returns `None` for `--continue` — in that
+/// case the ID is only known after polling, and callers should not
+/// prematurely store a stale value.
 ///
 /// Guards: the candidate ID must start with `ses_` — anything else is
 /// treated as absent so polling takes over.
@@ -616,7 +616,7 @@ mod extract_opencode_resume_id_tests {
 
     #[test]
     fn finds_session_id_after_session_flag() {
-        let a = args(&["run", "--quiet", "--session", "ses_abc", "continue the task"]);
+        let a = args(&["--session", "ses_abc", "--prompt", "continue the task"]);
         assert_eq!(
             extract_opencode_resume_id(&a).as_deref(),
             Some("ses_abc"),
@@ -626,13 +626,13 @@ mod extract_opencode_resume_id_tests {
     #[test]
     fn continue_only_returns_none() {
         // --continue defers the ID until polling — do not premature-store.
-        let a = args(&["run", "--quiet", "--continue"]);
+        let a = args(&["--continue"]);
         assert!(extract_opencode_resume_id(&a).is_none());
     }
 
     #[test]
     fn new_session_returns_none() {
-        let a = args(&["run", "--quiet", "fix bug"]);
+        let a = args(&["--prompt", "fix bug"]);
         assert!(extract_opencode_resume_id(&a).is_none());
     }
 
@@ -640,13 +640,13 @@ mod extract_opencode_resume_id_tests {
     fn rejects_non_ses_value_after_session_flag() {
         // --session followed by something that isn't a valid ses_ prefix
         // shouldn't leak into the stored_session_id.
-        let a = args(&["run", "--quiet", "--session", "bogus-value"]);
+        let a = args(&["--session", "bogus-value"]);
         assert!(extract_opencode_resume_id(&a).is_none());
     }
 
     #[test]
     fn session_flag_at_end_with_no_value_returns_none() {
-        let a = args(&["run", "--quiet", "--session"]);
+        let a = args(&["--session"]);
         assert!(extract_opencode_resume_id(&a).is_none());
     }
 }
