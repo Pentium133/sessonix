@@ -330,7 +330,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   handleExit: (sessionId) => {
-    get().updateSessionStatus(sessionId, "exited");
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, status: "exited" as const, status_line: "" } : s
+      ),
+    }));
   },
 
   clearSessionWorktree: (id) => {
