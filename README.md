@@ -1,6 +1,6 @@
 # Sessonix
 
-**Agent Mission Control** — run Claude Code, Codex CLI, Gemini CLI and any other AI agents in parallel from a single window.
+**Agent Mission Control** — run Claude Code, Codex CLI, Gemini CLI, OpenCode and any other AI agents in parallel from a single window.
 
 No more tab juggling. One dashboard, all your agents, every project.
 
@@ -20,7 +20,7 @@ Sessonix puts them all on one screen. You see the live status of every agent at 
 
 ### Run Multiple Agents Side by Side
 
-Launch Claude Code, Codex CLI, Gemini CLI, or any custom command — all from a unified session launcher. Each session runs in a real PTY terminal with full color and interactivity.
+Launch Claude Code, Codex CLI, Gemini CLI, OpenCode, or any custom command — all from a unified session launcher. Each session runs in a real PTY terminal with full color and interactivity.
 
 ### See What Every Agent Is Doing
 
