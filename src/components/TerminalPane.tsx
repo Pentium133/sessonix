@@ -312,3 +312,10 @@ export function writeToTerminal(sessionId: number, data: Uint8Array) {
   }
 }
 
+export function focusTerminal(sessionId: number) {
+  const instance = terminalPool.get(sessionId);
+  if (instance && !instance.disposed) {
+    instance.terminal.focus();
+  }
+}
+

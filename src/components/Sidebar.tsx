@@ -5,6 +5,8 @@ import { useTemplateStore } from "../store/templateStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { getGitStatus } from "../lib/git";
+import { writeToSession } from "../lib/api";
+import { focusTerminal } from "./TerminalPane";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
 import TemplateItem from "./TemplateItem";
@@ -258,19 +260,17 @@ export default function Sidebar() {
               key={t.id}
               template={t}
               onRun={() => {
-                if (activeProjectPath) {
-                  useUiStore.getState().openLauncher({
-                    open: true,
-                    mode: "session",
-                    projectPath: activeProjectPath,
-                    prefill: {
-                      agent: "",
-                      prompt: t.initial_prompt ?? "",
-                      taskName: t.name,
-                      skipPermissions: false,
-                    },
-                  });
+                const sid = activeSessionId;
+                if (sid == null) {
+                  showToast("No active session", "error");
+                  return;
                 }
+                const text = t.initial_prompt ?? "";
+                if (!text) return;
+                const encoder = new TextEncoder();
+                writeToSession(sid, Array.from(encoder.encode(text)))
+                  .then(() => focusTerminal(sid))
+                  .catch((err) => showToast(String(err), "error"));
               }}
               onEdit={() => setTemplateModal({ open: true, editing: t })}
               onDelete={() => {
