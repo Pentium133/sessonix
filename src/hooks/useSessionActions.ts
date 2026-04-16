@@ -28,6 +28,12 @@ function buildResumeArgs(session: Session): string[] {
   if (session.agent_type === "codex") {
     return ["resume", "--last"];
   }
+  if (session.agent_type === "opencode" && session.agentSessionId) {
+    return ["--session", session.agentSessionId];
+  }
+  if (session.agent_type === "opencode") {
+    return ["--continue"];
+  }
   // Gemini: prompt as positional arg (same as initial launch)
   if (session.agent_type === "gemini" && prompt) {
     return [prompt];
@@ -113,16 +119,21 @@ export function useSessionActions() {
   const handleForkSession = useCallback(async (session: Session) => {
     const { addSession } = useSessionStore.getState();
     try {
-      // For Codex, fork requires a known thread ID — without it we can't fork.
-      if (session.agent_type === "codex" && !session.agentSessionId) {
-        showToast("Cannot fork: thread ID not yet captured for this session", "error");
+      // For Codex and OpenCode, fork requires a known session/thread ID.
+      // Without it we'd be forking "the last session", which is racy.
+      if ((session.agent_type === "codex" || session.agent_type === "opencode")
+          && !session.agentSessionId) {
+        showToast("Cannot fork: session ID not yet captured for this session", "error");
         return;
       }
 
-      // For Codex with thread ID, use "fork" subcommand instead of "resume"
       let args: string[];
       if (session.agent_type === "codex" && session.agentSessionId) {
+        // Codex: dedicated `fork` subcommand
         args = ["fork", session.agentSessionId];
+      } else if (session.agent_type === "opencode" && session.agentSessionId) {
+        // OpenCode: `--fork --session <id>` on the top-level command
+        args = ["--fork", "--session", session.agentSessionId];
       } else {
         args = buildResumeArgs(session);
       }

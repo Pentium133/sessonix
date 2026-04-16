@@ -3962,7 +3962,7 @@ dependencies = [
 
 [[package]]
 name = "sessonix"
-version = "0.9.7"
+version = "0.10.0"
 dependencies = [
  "dirs 5.0.1",
  "env_logger",

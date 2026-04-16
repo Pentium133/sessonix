@@ -43,6 +43,7 @@ const sessonixDark: ThemeDefinition = {
     "--claude": "#C4A7E7",
     "--codex": "#7DD681",
     "--gemini": "#5ABFEF",
+    "--opencode": "#EAEAEA",
   },
   terminal: {
     background: "#0B0E14",
@@ -91,6 +92,7 @@ const sessonixLight: ThemeDefinition = {
     "--claude": "#8B5FC7",
     "--codex": "#2E8B3E",
     "--gemini": "#0C7EBF",
+    "--opencode": "#1A1F2B",
   },
   terminal: {
     background: "#F2F4F7",
@@ -139,6 +141,7 @@ const tokyoNight: ThemeDefinition = {
     "--claude": "#bb9af7",
     "--codex": "#9ece6a",
     "--gemini": "#7dcfff",
+    "--opencode": "#c0caf5",
   },
   terminal: {
     background: "#1a1b26",
@@ -187,6 +190,7 @@ const dracula: ThemeDefinition = {
     "--claude": "#bd93f9",
     "--codex": "#50fa7b",
     "--gemini": "#8be9fd",
+    "--opencode": "#f8f8f2",
   },
   terminal: {
     background: "#282a36",
@@ -235,6 +239,7 @@ const nord: ThemeDefinition = {
     "--claude": "#b48ead",
     "--codex": "#a3be8c",
     "--gemini": "#5e81ac",
+    "--opencode": "#eceff4",
   },
   terminal: {
     background: "#2e3440",
@@ -283,6 +288,7 @@ const monokaiPro: ThemeDefinition = {
     "--claude": "#ab9df2",
     "--codex": "#a9dc76",
     "--gemini": "#78dce8",
+    "--opencode": "#fcfcfa",
   },
   terminal: {
     background: "#2d2a2e",
@@ -331,6 +337,7 @@ const oneDark: ThemeDefinition = {
     "--claude": "#c678dd",
     "--codex": "#98c379",
     "--gemini": "#56b6c2",
+    "--opencode": "#d7dae0",
   },
   terminal: {
     background: "#282c34",
@@ -379,6 +386,7 @@ const catppuccinMocha: ThemeDefinition = {
     "--claude": "#cba6f7",
     "--codex": "#a6e3a1",
     "--gemini": "#89dceb",
+    "--opencode": "#e4e8f4",
   },
   terminal: {
     background: "#1e1e2e",

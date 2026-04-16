@@ -35,6 +35,7 @@
 - **Claude:** `#C4A7E7` — soft lavender purple (agent identity)
 - **Codex:** `#7DD681` — phosphor green (agent identity)
 - **Gemini:** `#5ABFEF` — bright sky blue (agent identity)
+- **OpenCode:** `#EAEAEA` — off-white (agent identity)
 - **Success:** `#7DD681` — running sessions, completed actions
 - **Warning:** `#F0B45A` — waiting permission, cost display
 - **Error:** `#F07178` — crashed sessions, validation errors
@@ -59,6 +60,7 @@
   --claude: #C4A7E7;
   --codex: #7DD681;
   --gemini: #5ABFEF;
+  --opencode: #EAEAEA;
   --radius: 6px;
   --radius-lg: 12px;
   --space: 4px;

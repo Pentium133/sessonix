@@ -34,8 +34,9 @@ describe("SessionLauncher", () => {
     expect(screen.getByText("claude")).toBeTruthy();
     expect(screen.getByText("gemini")).toBeTruthy();
     expect(screen.getByText("codex")).toBeTruthy();
+    expect(screen.getByText("opencode")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
-    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(5);
+    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(6);
   });
 
   it("defaults to claude agent", () => {
@@ -208,6 +209,123 @@ describe("SessionLauncher", () => {
         agent_type: "codex",
       })
     );
+  });
+
+  describe("OpenCode", () => {
+    it("shows OpenCode in agent pills", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      expect(screen.getByText("opencode")).toBeTruthy();
+    });
+
+    it("shows OpenCode Options when opencode selected", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      fireEvent.click(screen.getByText("opencode"));
+      expect(screen.getByText("OpenCode Options")).toBeTruthy();
+      expect(screen.queryByText("Claude Options")).toBeNull();
+    });
+
+    it("launches opencode with empty args for New mode (no prompt, TUI)", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("opencode"));
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "opencode",
+          args: [],
+          agent_type: "opencode",
+        })
+      );
+    });
+
+    it("passes prompt via --prompt flag for New mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("opencode"));
+      const promptInput = screen.getByPlaceholderText(/Enter a task for the agent/);
+      fireEvent.change(promptInput, { target: { value: "what is 2+2?" } });
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "opencode",
+          args: ["--prompt", "what is 2+2?"],
+          agent_type: "opencode",
+        })
+      );
+    });
+
+    it("launches opencode with --continue for Last mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("opencode"));
+      const opencodeLast = screen.getAllByText("Last").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("OpenCode")
+      );
+      fireEvent.click(opencodeLast!);
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "opencode",
+          args: ["--continue"],
+          agent_type: "opencode",
+        })
+      );
+    });
+
+    it("launches opencode with --session <id> for Resume mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("opencode"));
+      const opencodeResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("OpenCode")
+      );
+      fireEvent.click(opencodeResume!);
+      const idInput = screen.getByPlaceholderText("Session ID (ses_xxx)");
+      fireEvent.change(idInput, { target: { value: "ses_abc123" } });
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "opencode",
+          args: ["--session", "ses_abc123"],
+          agent_type: "opencode",
+        })
+      );
+    });
+
+    it("disables Launch for OpenCode Resume mode without ID", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      fireEvent.click(screen.getByText("opencode"));
+      const opencodeResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("OpenCode")
+      );
+      fireEvent.click(opencodeResume!);
+      const launchBtn = screen.getByText("Launch");
+      expect((launchBtn as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("clears resumeSessionId when switching from OpenCode to Codex pill", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+
+      // Enter OpenCode Resume mode with a session ID
+      fireEvent.click(screen.getByText("opencode"));
+      const opencodeResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("OpenCode")
+      );
+      fireEvent.click(opencodeResume!);
+      fireEvent.change(screen.getByPlaceholderText("Session ID (ses_xxx)"), {
+        target: { value: "ses_leak" },
+      });
+
+      // Switch to Codex — resumeSessionId state is shared, must be cleared
+      fireEvent.click(screen.getByText("codex"));
+      fireEvent.click(screen.getByText("Launch"));
+
+      // Codex default is "new" mode → args should be empty, not carry ses_leak
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "codex", args: [] })
+      );
+    });
   });
 
   describe("Launch inside task", () => {

@@ -11,29 +11,37 @@ import WorktreeIcon from "./WorktreeIcon";
 import type { LauncherPrefill } from "../store/uiStore";
 type ClaudeSessionMode = "new" | "continue" | "resume";
 type CodexSessionMode = "new" | "resume" | "last";
+type OpenCodeSessionMode = "new" | "resume" | "last";
 
 const AGENTS: { type: AgentType; label: string; command: string; color: string }[] = [
-  { type: "shell",  label: "shell",  command: "zsh",    color: "var(--text-dim)" },
-  { type: "claude", label: "claude", command: "claude", color: "var(--claude)"   },
-  { type: "gemini", label: "gemini", command: "gemini", color: "var(--gemini)"   },
-  { type: "codex",  label: "codex",  command: "codex",  color: "var(--codex)"    },
-  { type: "custom", label: "+",      command: "",       color: "var(--accent)"   },
+  { type: "shell",    label: "shell",    command: "zsh",      color: "var(--text-dim)" },
+  { type: "claude",   label: "claude",   command: "claude",   color: "var(--claude)"   },
+  { type: "gemini",   label: "gemini",   command: "gemini",   color: "var(--gemini)"   },
+  { type: "codex",    label: "codex",    command: "codex",    color: "var(--codex)"    },
+  { type: "opencode", label: "opencode", command: "opencode", color: "var(--opencode)" },
+  { type: "custom",   label: "+",        command: "",         color: "var(--accent)"   },
 ];
 
-function buildArgs(
-  agentType: AgentType,
-  claudeMode: ClaudeSessionMode,
-  codexMode: CodexSessionMode,
-  skipPerms: boolean,
-  resumeSessionId: string,
-  prompt: string
-): string[] {
+interface BuildArgsOptions {
+  agentType: AgentType;
+  claudeMode: ClaudeSessionMode;
+  codexMode: CodexSessionMode;
+  opencodeMode: OpenCodeSessionMode;
+  skipPerms: boolean;
+  resumeSessionId: string;
+  prompt: string;
+}
+
+function buildArgs(opts: BuildArgsOptions): string[] {
+  const { agentType, claudeMode, codexMode, opencodeMode, skipPerms, resumeSessionId, prompt } = opts;
+  const trimmedId = resumeSessionId.trim();
+
   if (agentType === "claude") {
     const args: string[] = [];
     if (skipPerms) args.push("--dangerously-skip-permissions");
     if (claudeMode === "continue") args.push("--continue");
-    if (claudeMode === "resume" && resumeSessionId.trim()) {
-      args.push("--resume", resumeSessionId.trim());
+    if (claudeMode === "resume" && trimmedId) {
+      args.push("--resume", trimmedId);
     }
     // Positional arg = interactive session with initial prompt (not -p which exits after response)
     if (prompt && claudeMode === "new") {
@@ -44,8 +52,8 @@ function buildArgs(
   }
   if (agentType === "codex") {
     const args: string[] = [];
-    if (codexMode === "resume" && resumeSessionId.trim()) {
-      args.push("resume", resumeSessionId.trim());
+    if (codexMode === "resume" && trimmedId) {
+      args.push("resume", trimmedId);
     } else if (codexMode === "last") {
       args.push("resume", "--last");
     }
@@ -54,6 +62,23 @@ function buildArgs(
       args.push(prompt);
     }
     // "new" → session_manager.rs polls Codex SQLite to capture thread ID
+    return args;
+  }
+  if (agentType === "opencode") {
+    // Bare `opencode` launches the interactive TUI (the default command).
+    // `opencode run` is batch-only — it exits after one message, so unusable
+    // for a persistent PTY session. Prompt must go through `--prompt` since
+    // a positional arg would be interpreted as the `project` path.
+    const args: string[] = [];
+    if (opencodeMode === "resume" && trimmedId) {
+      args.push("--session", trimmedId);
+    } else if (opencodeMode === "last") {
+      args.push("--continue");
+    }
+    if (prompt && opencodeMode === "new") {
+      args.push("--prompt", prompt);
+    }
+    // "new" → session_manager.rs polls OpenCode SQLite to capture session id
     return args;
   }
   if (agentType === "gemini") {
@@ -104,6 +129,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [customCommand, setCustomCommand] = useState("");
   const [claudeSessionMode, setClaudeSessionMode] = useState<ClaudeSessionMode>("new");
   const [codexSessionMode, setCodexSessionMode] = useState<CodexSessionMode>("new");
+  const [opencodeSessionMode, setOpencodeSessionMode] = useState<OpenCodeSessionMode>("new");
   const [skipPermissions, setSkipPermissions] = useState(false);
   const [resumeSessionId, setResumeSessionId] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -133,6 +159,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       setCustomCommand("");
       setClaudeSessionMode("new");
       setCodexSessionMode("new");
+      setOpencodeSessionMode("new");
       setSkipPermissions(prefill?.skipPermissions ?? useSettingsStore.getState().claudeSkipPermissions);
       skipPermsAutoSet.current = false;
       setResumeSessionId("");
@@ -208,7 +235,15 @@ export default function SessionLauncher(props: SessionLauncherProps) {
 
     const name = taskName.trim() || `${selectedAgent.label} session`;
     const trimmedPrompt = prompt.trim();
-    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, skipPermissions, resumeSessionId, trimmedPrompt);
+    const args = buildArgs({
+      agentType: selectedAgent.type,
+      claudeMode: claudeSessionMode,
+      codexMode: codexSessionMode,
+      opencodeMode: opencodeSessionMode,
+      skipPerms: skipPermissions,
+      resumeSessionId,
+      prompt: trimmedPrompt,
+    });
 
     // Append custom extra arguments (split by spaces, respecting quotes)
     if (extraArgs.trim()) {
@@ -253,7 +288,8 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const isLaunchDisabled =
     (selectedAgent.type === "custom" && !customCommand.trim()) ||
     (selectedAgent.type === "claude" && claudeSessionMode === "resume" && !resumeSessionId.trim()) ||
-    (selectedAgent.type === "codex" && codexSessionMode === "resume" && !resumeSessionId.trim());
+    (selectedAgent.type === "codex" && codexSessionMode === "resume" && !resumeSessionId.trim()) ||
+    (selectedAgent.type === "opencode" && opencodeSessionMode === "resume" && !resumeSessionId.trim());
 
   return (
     <div className="launcher-overlay" onClick={onClose}>
@@ -285,7 +321,14 @@ export default function SessionLauncher(props: SessionLauncherProps) {
                   ? ({ "--pill-accent": agent.color } as React.CSSProperties)
                   : undefined
               }
-              onClick={() => setSelectedAgent(agent)}
+              onClick={() => {
+                if (agent.type !== selectedAgent.type) {
+                  setSelectedAgent(agent);
+                  // Shared between Claude/Codex/OpenCode resume inputs — clear on agent switch
+                  // so a Codex thread ID doesn't leak into an OpenCode session ID field.
+                  setResumeSessionId("");
+                }
+              }}
             >
               <AgentIcon agentType={agent.type} size={16} />
               <span>{agent.label}</span>
@@ -406,6 +449,39 @@ export default function SessionLauncher(props: SessionLauncherProps) {
               <input
                 className="launcher-input"
                 placeholder="Thread ID (uuid)"
+                value={resumeSessionId}
+                onChange={(e) => setResumeSessionId(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}
+                style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
+              />
+            )}
+          </div>
+        )}
+
+        {/* OpenCode-specific options */}
+        {selectedAgent.type === "opencode" && (
+          <div className="launcher-claude-options">
+            <div className="launcher-section-divider">OpenCode Options</div>
+            <div className="launcher-option-row">
+              <span className="launcher-option-label">Session</span>
+              <div className="launcher-radio-group">
+                {(["new", "last", "resume"] as OpenCodeSessionMode[]).map((mode) => (
+                  <label key={mode} className="launcher-radio">
+                    <input
+                      type="radio"
+                      name="opencode-session-mode"
+                      checked={opencodeSessionMode === mode}
+                      onChange={() => { setOpencodeSessionMode(mode); setResumeSessionId(""); }}
+                    />
+                    {mode === "last" ? "Last" : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  </label>
+                ))}
+              </div>
+            </div>
+            {opencodeSessionMode === "resume" && (
+              <input
+                className="launcher-input"
+                placeholder="Session ID (ses_xxx)"
                 value={resumeSessionId}
                 onChange={(e) => setResumeSessionId(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}

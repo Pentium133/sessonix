@@ -12,6 +12,7 @@ const AGENT_COLORS: Record<string, string> = {
   claude: "var(--claude)",
   codex: "var(--codex)",
   gemini: "var(--gemini)",
+  opencode: "var(--opencode)",
 };
 
 export default function WelcomeWizard({ onComplete }: WelcomeWizardProps) {
@@ -94,7 +95,7 @@ export default function WelcomeWizard({ onComplete }: WelcomeWizardProps) {
             <h1 className="wizard-heading">Sessonix</h1>
             <p className="wizard-subtitle">Agent Mission Control</p>
             <p className="wizard-body">
-              Run Claude, Codex, Gemini and custom AI agents side by side.
+              Run Claude, Codex, Gemini, OpenCode and custom AI agents side by side.
               Each session gets its own terminal. Switch between them instantly.
             </p>
             <button className="wizard-btn-primary" onClick={() => setStep(2)}>
@@ -115,7 +116,7 @@ export default function WelcomeWizard({ onComplete }: WelcomeWizardProps) {
             ) : (
               <>
                 <div className="wizard-agents">
-                  {["claude", "codex", "gemini"].map((name) => (
+                  {["claude", "codex", "gemini", "opencode"].map((name) => (
                     <div key={name} className="wizard-agent-row">
                       <span
                         className="wizard-agent-dot"
