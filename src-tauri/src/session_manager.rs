@@ -53,6 +53,7 @@ pub struct CreateSessionParams<'a> {
     pub worktree_path: Option<&'a str>,
     pub base_commit: Option<&'a str>,
     pub prompt: Option<&'a str>,
+    pub task_id: Option<i64>,
 }
 
 impl SessionManager {
@@ -138,9 +139,24 @@ impl SessionManager {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // Use worktree_path as PTY working directory if set, otherwise use working_dir.
+        // If task_id is set, look up the task's worktree_path and use it for both
+        // the PTY cwd and the session's denormalized worktree_path. This keeps task
+        // as source of truth for worktree lifecycle while preserving existing
+        // session-level worktree reads (WorktreeIcon, git polling).
+        let (task_worktree_path, task_base_commit) = if let Some(tid) = params.task_id {
+            match self.db.get_task_by_id(tid) {
+                Ok(Some(task)) => (task.worktree_path, task.base_commit),
+                _ => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+
+        // Use (in priority): task worktree → explicit params.worktree_path → working_dir.
         // working_dir is always the project root (for project grouping in DB).
-        let pty_cwd = params.worktree_path.unwrap_or(params.working_dir);
+        let effective_worktree_path = task_worktree_path.as_deref().or(params.worktree_path);
+        let effective_base_commit = task_base_commit.as_deref().or(params.base_commit);
+        let pty_cwd = effective_worktree_path.unwrap_or(params.working_dir);
         let pty_id = self.pty.create_session(
             params.command,
             &args,
@@ -174,9 +190,10 @@ impl SessionManager {
                 command: params.command,
                 args: &args_json,
                 agent_session_id: stored_session_id.as_deref(),
-                worktree_path: params.worktree_path,
-                base_commit: params.base_commit,
+                worktree_path: effective_worktree_path,
+                base_commit: effective_base_commit,
                 initial_prompt: params.prompt,
+                task_id: params.task_id,
             })
             .map_err(|e| AppError::Db(e.to_string()))?;
 

@@ -64,4 +64,5 @@ pub struct CreateSessionRequest {
     pub worktree_path: Option<String>,
     pub base_commit: Option<String>,
     pub prompt: Option<String>,
+    pub task_id: Option<i64>,
 }

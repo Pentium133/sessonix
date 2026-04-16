@@ -42,6 +42,7 @@ fn create_session(
             worktree_path: request.worktree_path.as_deref(),
             base_commit: request.base_commit.as_deref(),
             prompt: request.prompt.as_deref(),
+            task_id: request.task_id,
         })
         .map_err(|e| e.to_string())
 }
@@ -445,6 +446,148 @@ fn update_template(state: tauri::State<'_, SessionManager>, id: i64, name: Strin
     state.db.update_template(id, &name, "", initial_prompt.as_deref(), false).map_err(|e| e.to_string())
 }
 
+// --- Tasks (worktree-scoped session groups) ---
+
+#[derive(serde::Deserialize)]
+struct CreateTaskRequest {
+    project_path: String,
+    name: String,
+    branch_name: String,
+}
+
+#[derive(serde::Serialize)]
+struct TaskInfo {
+    id: i64,
+    project_id: i64,
+    name: String,
+    branch: Option<String>,
+    worktree_path: Option<String>,
+    base_commit: Option<String>,
+    created_at: i64,
+}
+
+/// Parse SQLite `datetime('now')` output (`YYYY-MM-DD HH:MM:SS` in UTC) to Unix ms.
+/// Returns 0 on parse failure. Implemented inline to avoid pulling in chrono.
+fn parse_iso_to_unix_ms(s: &str) -> i64 {
+    if s.len() < 19 {
+        return 0;
+    }
+    let parse = |start: usize, end: usize| -> i64 {
+        s.get(start..end).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0)
+    };
+    let year = parse(0, 4);
+    let month = parse(5, 7);
+    let day = parse(8, 10);
+    let hour = parse(11, 13);
+    let minute = parse(14, 16);
+    let second = parse(17, 19);
+
+    // Howard Hinnant's days_from_civil: days since 1970-01-01 (UTC).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = month;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    (days * 86400 + hour * 3600 + minute * 60 + second) * 1000
+}
+
+fn task_row_to_info(row: db::TaskRow) -> TaskInfo {
+    TaskInfo {
+        id: row.id,
+        project_id: row.project_id,
+        name: row.name,
+        branch: row.branch,
+        worktree_path: row.worktree_path,
+        base_commit: row.base_commit,
+        created_at: parse_iso_to_unix_ms(&row.created_at),
+    }
+}
+
+#[tauri::command]
+fn create_task(
+    state: tauri::State<'_, SessionManager>,
+    request: CreateTaskRequest,
+) -> Result<TaskInfo, String> {
+    // Project must already exist (added via add_project). Lookup id first.
+    let project_id = state
+        .db
+        .find_project_id_by_path(&request.project_path)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Unknown project path: {}", request.project_path))?;
+
+    // Create the worktree (blocking git2 op). Failure here leaves nothing to clean up.
+    let wt = git_manager::create_worktree(&request.project_path, &request.branch_name)?;
+
+    // Insert the row. On DB failure, compensate by removing the worktree we just created.
+    let task_id = match state.db.insert_task(
+        project_id,
+        &request.name,
+        Some(&wt.branch),
+        Some(&wt.path),
+        Some(&wt.base_commit),
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            let _ = git_manager::remove_worktree(&wt.path);
+            return Err(format!("Failed to persist task: {}", e));
+        }
+    };
+
+    let row = state
+        .db
+        .get_task_by_id(task_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Task row vanished after insert".to_string())?;
+    Ok(task_row_to_info(row))
+}
+
+#[tauri::command]
+fn list_tasks(
+    state: tauri::State<'_, SessionManager>,
+    project_path: String,
+) -> Result<Vec<TaskInfo>, String> {
+    let rows = state
+        .db
+        .list_tasks_by_project_path(&project_path)
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(task_row_to_info).collect())
+}
+
+#[tauri::command]
+fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<(), String> {
+    // 1. Look up task to learn its worktree_path.
+    let task = state
+        .db
+        .get_task_by_id(task_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Task {} not found", task_id))?;
+
+    // 2. Kill all PTY sessions belonging to this task.
+    //    Silently swallow errors — sessions that already exited return Err from kill_session.
+    let sessions = state
+        .db
+        .list_sessions_by_task_id(task_id)
+        .map_err(|e| e.to_string())?;
+    for s in &sessions {
+        if let Some(pid) = s.pty_id {
+            if let Ok(session) = state.pty.get_session(pid) {
+                let _ = session.kill();
+            }
+        }
+    }
+
+    // 3. Remove the worktree (if tracked). Best-effort — if it was already deleted
+    //    manually, remove_worktree returns Ok with a no-op branch inside.
+    if let Some(ref path) = task.worktree_path {
+        let _ = git_manager::remove_worktree(path);
+    }
+
+    // 4. Finally delete DB rows (sessions first, then task — inside a transaction).
+    state.db.delete_task(task_id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_setting(state: tauri::State<'_, SessionManager>, key: String) -> Result<Option<String>, String> {
     state.db.get_setting(&key).map_err(|e| e.to_string())
@@ -628,6 +771,30 @@ async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
 }
 
 #[cfg(test)]
+mod iso_parse_tests {
+    use super::parse_iso_to_unix_ms;
+
+    #[test]
+    fn parses_sqlite_datetime_now_format() {
+        // Known epoch: 1970-01-01 00:00:00 UTC = 0
+        assert_eq!(parse_iso_to_unix_ms("1970-01-01 00:00:00"), 0);
+        // 1970-01-01 00:00:01 = 1000 ms
+        assert_eq!(parse_iso_to_unix_ms("1970-01-01 00:00:01"), 1000);
+        // 2000-01-01 00:00:00 UTC = 946_684_800 seconds
+        assert_eq!(parse_iso_to_unix_ms("2000-01-01 00:00:00"), 946_684_800_000);
+        // 2026-04-16 12:00:00 UTC = 1_776_340_800 seconds
+        assert_eq!(parse_iso_to_unix_ms("2026-04-16 12:00:00"), 1_776_340_800_000);
+    }
+
+    #[test]
+    fn malformed_returns_zero() {
+        assert_eq!(parse_iso_to_unix_ms(""), 0);
+        assert_eq!(parse_iso_to_unix_ms("not a date"), 0);
+        assert_eq!(parse_iso_to_unix_ms("2026-04-16"), 0); // Too short
+    }
+}
+
+#[cfg(test)]
 mod update_tests {
     use super::is_newer_version;
 
@@ -805,6 +972,9 @@ pub fn run() {
             list_templates,
             delete_template,
             update_template,
+            create_task,
+            list_tasks,
+            delete_task,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
