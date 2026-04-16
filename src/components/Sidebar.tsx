@@ -1,13 +1,19 @@
 import { useState, useRef, useEffect } from "react";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
+import { useTemplateStore } from "../store/templateStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { getGitStatus } from "../lib/git";
+import { writeToSession } from "../lib/api";
+import { focusTerminal } from "./TerminalPane";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
+import TemplateItem from "./TemplateItem";
+import TemplateSaveModal from "./TemplateSaveModal";
 import WorktreeIcon from "./WorktreeIcon";
 import type { GitStatus } from "../lib/types";
+import type { TemplateInfo } from "../lib/api";
 
 export default function Sidebar() {
   const projects = useProjectStore((s) => s.projects);
@@ -31,6 +37,14 @@ export default function Sidebar() {
 
   const { handleRemoveSession, handleRelaunchSession, handleForkSession } = useSessionActions();
 
+  const templates = useTemplateStore((s) => s.templates);
+  const loadTemplates = useTemplateStore((s) => s.load);
+  const addTemplate = useTemplateStore((s) => s.add);
+  const updateTemplate = useTemplateStore((s) => s.update);
+  const removeTemplate = useTemplateStore((s) => s.remove);
+
+  const [templateModal, setTemplateModal] = useState<{ open: boolean; editing?: TemplateInfo }>({ open: false });
+
   const [projectGit, setProjectGit] = useState<GitStatus | null>(null);
 
   useEffect(() => {
@@ -42,6 +56,10 @@ export default function Sidebar() {
     const interval = setInterval(fetch, 5_000);
     return () => clearInterval(interval);
   }, [activeProjectPath]);
+
+  useEffect(() => {
+    if (activeProjectPath) loadTemplates(activeProjectPath);
+  }, [activeProjectPath, loadTemplates]);
 
   const activeProject = projects.find((p) => p.path === activeProjectPath);
   const projectSessions = sessions
@@ -219,6 +237,76 @@ export default function Sidebar() {
           ))
         )}
       </div>
+      <div className="sidebar-templates">
+        <div className="sidebar-templates-header">
+          <span>Templates</span>
+          <button
+            className="new-btn"
+            onClick={() => setTemplateModal({ open: true })}
+            title="New template"
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="6" y1="1" x2="6" y2="11" />
+              <line x1="1" y1="6" x2="11" y2="6" />
+            </svg>
+          </button>
+        </div>
+        {templates.length === 0 ? (
+          <div className="sidebar-templates-empty">
+            No templates yet
+          </div>
+        ) : (
+          templates.map((t) => (
+            <TemplateItem
+              key={t.id}
+              template={t}
+              onRun={() => {
+                const sid = activeSessionId;
+                if (sid == null) {
+                  showToast("No active session", "error");
+                  return;
+                }
+                const text = t.initial_prompt ?? "";
+                if (!text) {
+                  showToast("Template has no prompt", "error");
+                  return;
+                }
+                const encoder = new TextEncoder();
+                writeToSession(sid, Array.from(encoder.encode(text + "\n")))
+                  .then(() => focusTerminal(sid))
+                  .catch((err) => showToast(String(err), "error"));
+              }}
+              onEdit={() => setTemplateModal({ open: true, editing: t })}
+              onDelete={() => {
+                removeTemplate(t.id).catch((err) => showToast(String(err), "error"));
+              }}
+            />
+          ))
+        )}
+      </div>
+      {templateModal.open && (
+        <TemplateSaveModal
+          title={templateModal.editing ? "Edit Template" : "New Template"}
+          initialName={templateModal.editing?.name}
+          initialPrompt={templateModal.editing?.initial_prompt ?? undefined}
+          onClose={() => setTemplateModal({ open: false })}
+          onSave={async (name, prompt) => {
+            if (!activeProjectPath) return;
+            try {
+              if (templateModal.editing) {
+                await updateTemplate(templateModal.editing.id, name, prompt);
+                showToast(`Template "${name}" updated`, "success");
+              } else {
+                await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+                showToast(`Template "${name}" saved`, "success");
+              }
+              setTemplateModal({ open: false });
+            } catch (err) {
+              showToast(String(err), "error");
+            }
+          }}
+        />
+      )}
     </aside>
   );
 }

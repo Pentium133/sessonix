@@ -55,6 +55,7 @@ function makeSessions(count: number, projectPath: string): Session[] {
     gitStatus: null,
     worktree_path: null,
     base_commit: null,
+    initial_prompt: null,
   }));
 }
 
@@ -121,7 +122,7 @@ describe("Sidebar (SessionPanel)", () => {
       {
         id: 2, command: "claude", args: [], working_dir: "/tmp/other",
         task_name: "Other Session", agent_type: "claude", status: "running",
-        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null,
+        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null, initial_prompt: null,
       },
     ];
     setupStores(projects, sessions);
@@ -204,7 +205,7 @@ describe("Sidebar (SessionPanel)", () => {
     const sessions = makeSessions(2, "/tmp/app");
     setupStores(projects, sessions, 1);
     const { container } = render(<Sidebar />);
-    const activeItem = container.querySelector(".session-item.active");
+    const activeItem = container.querySelector(".session-card.active");
     expect(activeItem).toBeTruthy();
     expect(activeItem?.textContent).toContain("Session 1");
   });
@@ -221,28 +222,28 @@ describe("Sidebar (SessionPanel)", () => {
 
     it("shows confirm/cancel on Kill click", () => {
       const { container } = renderRunningSession();
-      expect(container.querySelector(".kill-btn")).toBeTruthy();
+      expect(container.querySelector(".card-btn-kill")).toBeTruthy();
       expect(container.querySelector(".kill-confirm-btn")).toBeNull();
 
-      fireEvent.click(container.querySelector(".kill-btn")!);
+      fireEvent.click(container.querySelector(".card-btn-kill")!);
 
       expect(container.querySelector(".kill-confirm-btn")).toBeTruthy();
       expect(container.querySelector(".kill-cancel-btn")).toBeTruthy();
-      expect(container.querySelector(".kill-btn")).toBeNull();
+      expect(container.querySelector(".card-btn-kill")).toBeNull();
     });
 
     it("restores Kill button on Cancel", () => {
       const { container } = renderRunningSession();
-      fireEvent.click(container.querySelector(".kill-btn")!);
+      fireEvent.click(container.querySelector(".card-btn-kill")!);
       fireEvent.click(container.querySelector(".kill-cancel-btn")!);
 
-      expect(container.querySelector(".kill-btn")).toBeTruthy();
+      expect(container.querySelector(".card-btn-kill")).toBeTruthy();
       expect(container.querySelector(".kill-confirm-btn")).toBeNull();
     });
 
     it("calls handleRemoveSession on confirm Kill", () => {
       const { container } = renderRunningSession();
-      fireEvent.click(container.querySelector(".kill-btn")!);
+      fireEvent.click(container.querySelector(".card-btn-kill")!);
       fireEvent.click(container.querySelector(".kill-confirm-btn")!);
 
       expect(mockHandleRemoveSession).toHaveBeenCalledWith(1);
@@ -250,7 +251,7 @@ describe("Sidebar (SessionPanel)", () => {
 
     it("Shift+click Kill bypasses confirmation", () => {
       const { container } = renderRunningSession();
-      fireEvent.click(container.querySelector(".kill-btn")!, { shiftKey: true });
+      fireEvent.click(container.querySelector(".card-btn-kill")!, { shiftKey: true });
 
       expect(mockHandleRemoveSession).toHaveBeenCalledWith(1);
       expect(container.querySelector(".kill-confirm-btn")).toBeNull();
@@ -266,7 +267,7 @@ describe("Sidebar (SessionPanel)", () => {
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);
 
-      expect(container.querySelector(".fork-btn")).toBeTruthy();
+      expect(container.querySelector(".card-btn-fork")).toBeTruthy();
     });
 
     it("does not show Fork for non-claude sessions", () => {
@@ -287,11 +288,12 @@ describe("Sidebar (SessionPanel)", () => {
         gitStatus: null,
         worktree_path: null,
         base_commit: null,
+        initial_prompt: null,
       }];
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);
 
-      expect(container.querySelector(".fork-btn")).toBeNull();
+      expect(container.querySelector(".card-btn-fork")).toBeNull();
     });
 
     it("calls handleForkSession on Fork confirm", () => {
@@ -302,7 +304,7 @@ describe("Sidebar (SessionPanel)", () => {
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);
 
-      fireEvent.click(container.querySelector(".fork-btn")!);
+      fireEvent.click(container.querySelector(".card-btn-fork")!);
       expect(container.querySelector(".kill-confirm-btn")).toBeTruthy();
 
       fireEvent.click(container.querySelector(".kill-confirm-btn")!);

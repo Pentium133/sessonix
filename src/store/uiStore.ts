@@ -6,6 +6,13 @@ import { THEME_IDS, getThemeById, resolveSystemTheme } from "../lib/themes";
 import type { ThemeId } from "../lib/themes";
 import { getSetting, setSetting } from "../lib/api";
 
+export interface LauncherPrefill {
+  agent: string;
+  prompt: string;
+  taskName: string;
+  skipPermissions: boolean;
+}
+
 const ZOOM_MIN = 0.75;
 const ZOOM_MAX = 1.5;
 const ZOOM_STEP = 0.05;
@@ -32,7 +39,7 @@ function debouncedSaveZoom(zoom: number) {
 type LauncherState =
   | { open: false }
   | { open: true; mode: "project" }
-  | { open: true; mode: "session"; projectPath: string };
+  | { open: true; mode: "session"; projectPath: string; prefill?: LauncherPrefill };
 
 interface UiState {
   sidebarWidth: number;

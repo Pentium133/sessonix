@@ -15,6 +15,7 @@ export interface CreateSessionRequest {
   agent_type?: AgentType;
   worktree_path?: string;
   base_commit?: string;
+  prompt?: string;
 }
 
 export interface Project {
@@ -39,6 +40,7 @@ export interface Session {
   gitStatus: GitStatus | null;
   worktree_path: string | null;
   base_commit: string | null;
+  initial_prompt: string | null;
 }
 
 export interface GitStatus {

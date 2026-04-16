@@ -6,6 +6,7 @@ import { getGitStatus, createWorktree } from "../lib/git";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
+import type { LauncherPrefill } from "../store/uiStore";
 type ClaudeSessionMode = "new" | "continue" | "resume";
 type CodexSessionMode = "new" | "resume" | "last";
 
@@ -22,7 +23,8 @@ function buildArgs(
   claudeMode: ClaudeSessionMode,
   codexMode: CodexSessionMode,
   skipPerms: boolean,
-  resumeSessionId: string
+  resumeSessionId: string,
+  prompt: string
 ): string[] {
   if (agentType === "claude") {
     const args: string[] = [];
@@ -30,6 +32,10 @@ function buildArgs(
     if (claudeMode === "continue") args.push("--continue");
     if (claudeMode === "resume" && resumeSessionId.trim()) {
       args.push("--resume", resumeSessionId.trim());
+    }
+    // Positional arg = interactive session with initial prompt (not -p which exits after response)
+    if (prompt && claudeMode === "new") {
+      args.push(prompt);
     }
     // "new" → session_manager.rs generates --session-id <uuid>
     return args;
@@ -41,9 +47,21 @@ function buildArgs(
     } else if (codexMode === "last") {
       args.push("resume", "--last");
     }
+    // For new Codex sessions, prompt is passed as positional arg
+    if (prompt && codexMode === "new") {
+      args.push(prompt);
+    }
     // "new" → session_manager.rs polls Codex SQLite to capture thread ID
     return args;
   }
+  if (agentType === "gemini") {
+    const args: string[] = [];
+    if (prompt) {
+      args.push(prompt);
+    }
+    return args;
+  }
+  // shell/custom: prompt handled via backend stdin write, not args
   return [];
 }
 
@@ -59,6 +77,7 @@ interface NewSessionProps {
   isOpen: boolean;
   onClose: () => void;
   projectPath: string;
+  prefill?: LauncherPrefill;
   onLaunch: (params: {
     command: string;
     args: string[];
@@ -67,6 +86,7 @@ interface NewSessionProps {
     agent_type: AgentType;
     worktree_path?: string;
     base_commit?: string;
+    prompt?: string;
   }) => void;
 }
 
@@ -82,6 +102,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [codexSessionMode, setCodexSessionMode] = useState<CodexSessionMode>("new");
   const [skipPermissions, setSkipPermissions] = useState(false);
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [extraArgs, setExtraArgs] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
   const [worktreeBranch, setWorktreeBranch] = useState("");
@@ -90,18 +111,24 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [worktreeCreating, setWorktreeCreating] = useState(false);
   const taskNameRef = useRef<HTMLInputElement>(null);
   const folderPickerTriggered = useRef(false);
+  const skipPermsAutoSet = useRef(false);
+
+  const prefill = props.mode === "session" ? props.prefill : undefined;
 
   // Reset state when opening
   useEffect(() => {
     if (isOpen) {
-      setTaskName("");
-      setCustomCommand("");
       const defaultType = useSettingsStore.getState().defaultAgent;
-      setSelectedAgent(AGENTS.find((a) => a.type === defaultType) ?? AGENTS[1]);
+      const agentType = prefill?.agent || defaultType;
+      setSelectedAgent(AGENTS.find((a) => a.type === agentType) ?? AGENTS[1]);
+      setTaskName(prefill?.taskName ?? "");
+      setCustomCommand("");
       setClaudeSessionMode("new");
       setCodexSessionMode("new");
-      setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
+      setSkipPermissions(prefill?.skipPermissions ?? useSettingsStore.getState().claudeSkipPermissions);
+      skipPermsAutoSet.current = false;
       setResumeSessionId("");
+      setPrompt(prefill?.prompt ?? "");
       setExtraArgs("");
       setUseWorktree(false);
       setWorktreeBranch("");
@@ -172,7 +199,8 @@ export default function SessionLauncher(props: SessionLauncherProps) {
     if (!command) { launchingRef.current = false; return; }
 
     const name = taskName.trim() || `${selectedAgent.label} session`;
-    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, skipPermissions, resumeSessionId);
+    const trimmedPrompt = prompt.trim();
+    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, skipPermissions, resumeSessionId, trimmedPrompt);
 
     // Append custom extra arguments (split by spaces, respecting quotes)
     if (extraArgs.trim()) {
@@ -207,6 +235,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       agent_type: selectedAgent.type,
       worktree_path: worktreePath,
       base_commit: baseCommit,
+      prompt: trimmedPrompt || undefined,
     });
     launchingRef.current = false;
     onClose();
@@ -267,6 +296,32 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}
         />
 
+        {/* Initial prompt */}
+        {selectedAgent.type !== "custom" && (
+          <textarea
+            className="launcher-input launcher-prompt"
+            placeholder={selectedAgent.type === "shell" ? "Initial command (optional)" : "Enter a task for the agent... (optional)"}
+            value={prompt}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              if (selectedAgent.type === "claude") {
+                if (e.target.value.trim()) {
+                  // Auto-check skip permissions when prompt is entered
+                  if (!skipPermissions) {
+                    setSkipPermissions(true);
+                    skipPermsAutoSet.current = true;
+                  }
+                } else if (skipPermsAutoSet.current) {
+                  // Auto-uncheck only if we auto-set it (user didn't toggle manually)
+                  setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
+                  skipPermsAutoSet.current = false;
+                }
+              }
+            }}
+            rows={3}
+          />
+        )}
+
         {/* Claude-specific options */}
         {selectedAgent.type === "claude" && (
           <div className="launcher-claude-options">
@@ -301,7 +356,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
               <input
                 type="checkbox"
                 checked={skipPermissions}
-                onChange={(e) => setSkipPermissions(e.target.checked)}
+                onChange={(e) => { setSkipPermissions(e.target.checked); skipPermsAutoSet.current = false; }}
               />
               Skip permissions
             </label>

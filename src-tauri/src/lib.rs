@@ -41,6 +41,7 @@ fn create_session(
             agent_type: request.agent_type.as_deref().unwrap_or("custom"),
             worktree_path: request.worktree_path.as_deref(),
             base_commit: request.base_commit.as_deref(),
+            prompt: request.prompt.as_deref(),
         })
         .map_err(|e| e.to_string())
 }
@@ -284,6 +285,7 @@ struct SessionInfo {
     sort_order: u32,
     worktree_path: Option<String>,
     base_commit: Option<String>,
+    initial_prompt: Option<String>,
 }
 
 #[tauri::command]
@@ -325,6 +327,7 @@ fn list_sessions(
             sort_order: s.sort_order,
             worktree_path: s.worktree_path,
             base_commit: s.base_commit,
+            initial_prompt: s.initial_prompt,
         })
         .collect())
 }
@@ -385,6 +388,61 @@ fn get_scrollback(
         .db
         .get_scrollback(pty_id)
         .map_err(|e| e.to_string())
+}
+
+// --- Templates ---
+
+#[derive(serde::Serialize)]
+struct TemplateInfo {
+    id: i64,
+    name: String,
+    project_path: String,
+    agent: String,
+    initial_prompt: Option<String>,
+    skip_permissions: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct CreateTemplateRequest {
+    name: String,
+    project_path: String,
+    agent: String,
+    initial_prompt: Option<String>,
+    skip_permissions: bool,
+}
+
+#[tauri::command]
+fn create_template(state: tauri::State<'_, SessionManager>, request: CreateTemplateRequest) -> Result<i64, String> {
+    state.db.insert_template(
+        &request.name,
+        &request.project_path,
+        &request.agent,
+        request.initial_prompt.as_deref(),
+        request.skip_permissions,
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_templates(state: tauri::State<'_, SessionManager>, project_path: String) -> Result<Vec<TemplateInfo>, String> {
+    let rows = state.db.list_templates(&project_path).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|t| TemplateInfo {
+        id: t.id,
+        name: t.name,
+        project_path: t.project_path,
+        agent: t.agent,
+        initial_prompt: t.initial_prompt,
+        skip_permissions: t.skip_permissions,
+    }).collect())
+}
+
+#[tauri::command]
+fn delete_template(state: tauri::State<'_, SessionManager>, id: i64) -> Result<(), String> {
+    state.db.delete_template(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_template(state: tauri::State<'_, SessionManager>, id: i64, name: String, initial_prompt: Option<String>) -> Result<(), String> {
+    state.db.update_template(id, &name, "", initial_prompt.as_deref(), false).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -743,6 +801,10 @@ pub fn run() {
             remove_worktree,
             clear_worktree_path,
             check_for_update,
+            create_template,
+            list_templates,
+            delete_template,
+            update_template,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

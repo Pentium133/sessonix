@@ -63,4 +63,5 @@ pub struct CreateSessionRequest {
     pub agent_type: Option<String>,
     pub worktree_path: Option<String>,
     pub base_commit: Option<String>,
+    pub prompt: Option<String>,
 }

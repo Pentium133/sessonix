@@ -499,51 +499,71 @@ body {
   color: var(--text-bright);
 }
 
-/* Session items */
-.session-item {
-  padding: calc(var(--space) * 3) calc(var(--space) * 3);
+/* Session cards */
+.session-card {
+  display: flex;
   border-radius: var(--radius);
   cursor: pointer;
-  border-left: 2px solid transparent;
   margin-bottom: 2px;
-  min-height: 44px;
+  min-height: 48px;
+  overflow: hidden;
+  transition: background 0.1s;
 }
 
-.session-item:hover {
+.session-card:hover {
   background: var(--hover);
 }
 
-.session-item.active {
+.session-card.active {
   background: var(--hover);
-  border-left-color: var(--accent);
 }
 
-.session-item.drag-over {
-  border-top: 2px solid var(--accent);
+.session-card.drag-over {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 
-.session-item[draggable="true"] {
+.session-card[draggable="true"] {
   cursor: grab;
   -webkit-app-region: no-drag;
 }
 
-.session-item[draggable="true"]:active {
+.session-card[draggable="true"]:active {
   cursor: grabbing;
   opacity: 0.6;
 }
 
-.session-item-header {
+/* Agent color badge — left edge strip */
+.card-badge {
+  width: 3px;
+  flex-shrink: 0;
+  background: var(--agent-color, var(--text-dim));
+  border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.card-body {
+  flex: 1;
+  min-width: 0;
+  padding: calc(var(--space) * 2) calc(var(--space) * 2.5);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* Top row: icon, name, duration, status dot */
+.card-row-top {
   display: flex;
   align-items: center;
-  gap: calc(var(--space) * 2);
+  gap: calc(var(--space) * 1.5);
 }
 
 .agent-icon {
   flex-shrink: 0;
 }
 
-.session-name {
-  font-size: 13px;
+.card-name {
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-bright);
   flex: 1;
   overflow: hidden;
@@ -551,151 +571,121 @@ body {
   white-space: nowrap;
 }
 
-.status-badge {
+.card-duration {
   font-size: 10px;
-  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   flex-shrink: 0;
 }
 
-.session-item-meta {
+/* Bottom row: status line + actions */
+.card-row-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: calc(var(--space) * 1.5);
-  padding-left: calc(8px + var(--space) * 2);
+  gap: calc(var(--space) * 2);
+  min-height: 18px;
 }
 
-.session-agent-label {
+.card-status-line {
   font-size: 11px;
   color: var(--text-dim);
-  text-transform: capitalize;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.session-branch {
-  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-transform: none;
+  flex: 1;
+  min-width: 0;
 }
+
+.card-status-dim {
+  text-transform: capitalize;
+}
+
+.card-branch {
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
 .session-wt-icon {
   color: var(--success);
   flex-shrink: 0;
 }
-.wt-remove-btn {
-  background: none;
-  border: 1px solid var(--error);
-  color: var(--error);
-  font-size: 10px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-weight: 600;
-}
-.wt-remove-btn:hover {
-  background: var(--error);
-  color: var(--bg);
-}
 
-.kill-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.session-item:hover .kill-btn {
-  opacity: 1;
-}
-
-.kill-btn:hover {
-  color: var(--error);
-  border-color: var(--error);
-}
-
-/* Relaunch button */
-.relaunch-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.session-item:hover .relaunch-btn {
-  opacity: 1;
-}
-
-.relaunch-btn:hover {
-  color: var(--success);
-  border-color: var(--success);
-}
-
-.fork-btn {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  margin-left: auto;
-  margin-right: 4px;
-}
-
-.session-item:hover .fork-btn {
-  opacity: 1;
-}
-
-.fork-btn:hover {
-  color: var(--claude);
-  border-color: var(--claude);
-}
-
-/* Session actions row */
-.session-actions {
+/* Card action buttons — visible on hover */
+.card-actions {
   display: flex;
-  gap: 4px;
+  gap: 3px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
 }
 
-.delete-btn {
+.session-card:hover .card-actions {
+  opacity: 1;
+}
+
+.card-btn {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 11px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
   line-height: 1.4;
+  transition: color 0.1s, border-color 0.1s;
 }
 
-.session-item:hover .delete-btn {
-  opacity: 1;
+.card-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
 }
 
-.delete-btn:hover {
+.card-btn-relaunch:hover {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.card-btn-delete:hover {
   color: var(--error);
   border-color: var(--error);
 }
 
-/* Kill confirmation inline */
+.card-btn-kill:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.card-btn-fork:hover {
+  color: var(--claude);
+  border-color: var(--claude);
+}
+
+.card-btn-wt-remove:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* Kill/fork confirmation inline */
 .kill-confirm {
   display: flex;
-  gap: 4px;
+  gap: 3px;
 }
 
 .kill-confirm-btn {
@@ -703,8 +693,8 @@ body {
   border: none;
   color: var(--bg);
   font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
   cursor: pointer;
   font-weight: 600;
 }
@@ -714,8 +704,8 @@ body {
   border: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
   cursor: pointer;
 }
 
@@ -989,6 +979,14 @@ body {
   color: var(--text-dim);
 }
 
+.launcher-prompt {
+  resize: vertical;
+  min-height: calc(var(--space) * 18);
+  max-height: calc(var(--space) * 48);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
 .launcher-worktree-section {
   border-top: 1px solid var(--border);
   padding-top: calc(var(--space) * 2);
@@ -1002,7 +1000,8 @@ body {
 
 .launcher-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: calc(var(--space) * 2);
   margin-top: calc(var(--space) * 2);
 }
 
@@ -1014,6 +1013,7 @@ body {
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
+  margin-right: auto;
 }
 
 .launcher-back:hover {
@@ -1039,6 +1039,128 @@ body {
 .launcher-launch:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Sidebar templates section */
+.sidebar-templates {
+  border-top: 1px solid var(--border);
+  padding: calc(var(--space) * 2) calc(var(--space) * 3);
+  flex-shrink: 1;
+  min-height: 60px;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.sidebar-templates-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: calc(var(--space) * 2) 0;
+}
+
+.sidebar-templates-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: calc(var(--space) * 2);
+}
+
+/* Template item */
+.template-item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+  margin-bottom: 2px;
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
+}
+
+.template-item:hover {
+  background: var(--hover);
+}
+
+.template-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.template-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-prompt {
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.template-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: calc(var(--space) * 2);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.template-item:hover .template-actions {
+  opacity: 1;
+}
+
+.template-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.template-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.template-btn-run:hover {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.template-btn-delete:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.template-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: calc(var(--space) * 5);
+  width: 560px;
+  max-width: 90vw;
+}
+
+.template-modal .launcher-prompt {
+  min-height: 200px;
+  max-height: 50vh;
 }
 
 .launcher-project-badge {
