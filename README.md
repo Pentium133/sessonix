@@ -26,25 +26,31 @@ Launch Claude Code, Codex CLI, Gemini CLI, or any custom command — all from a 
 
 Live status badges show the current state of each session — Thinking, Reading, Writing, Idle, or Error — without switching to it. For Claude, optional hooks provide instant status updates.
 
-### Organize by Project
+### Group Sessions into Tasks
 
-Group sessions by project directory. The entire UI scopes to the active project — sidebar, session tabs, keyboard shortcuts. Switch projects in one click.
+Create a Task — give it a name, get a git worktree on its own branch — then launch multiple agent and shell sessions inside it. A Claude session to write the code, a shell to run tests, a Codex session for a second opinion. All three share the same worktree, all three live under the same Task in the sidebar, collapsed into a neat group.
+
+Branch names are auto-generated from the task name as you type (`Fix auth flow` → `feat/fix-auth-flow`), with transliteration for Cyrillic, Ukrainian, and accented Latin input. Delete the task and Sessonix kills every session inside, removes the worktree, and cleans up the database in one atomic step.
+
+### Git Worktrees Built In
+
+Tick a checkbox to launch a single session in an isolated git worktree — the agent works on its own branch in its own directory, and Sessonix cleans up when you're done. For multi-session workflows, wrap the worktree in a Task (above).
 
 ### Switch Instantly, Lose Nothing
 
 Flip between sessions with `Cmd+1-9`. A ring buffer captures all output while you're away, so you see every line the agent produced — even if you weren't watching.
 
-### Git Worktrees Built In
+### Organize by Project
 
-Tick a checkbox to launch a session in an isolated git worktree. The agent works on its own branch in its own directory. When you're done, Sessonix cleans up the worktree for you.
+Group sessions by project directory. The entire UI scopes to the active project — sidebar, session tabs, keyboard shortcuts. Switch projects in one click.
+
+### Survives Restarts
+
+Projects, sessions, tasks, active selection, and terminal scrollback are persisted to a local database. Relaunch the app and pick up exactly where you left off.
 
 ### Git Status at a Glance
 
 Current branch, modified/added/deleted file counts — always visible in the status bar. Worktree sessions are clearly marked.
-
-### Survives Restarts
-
-Projects, sessions, and terminal scrollback are persisted to a local database. Relaunch the app and pick up where you left off.
 
 ### Keyboard-First Workflow
 
