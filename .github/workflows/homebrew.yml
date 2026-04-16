@@ -1,0 +1,73 @@
+name: Update Homebrew Cask
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-tap:
+    name: Update Homebrew Cask
+    if: startsWith(github.event.release.tag_name, 'v')
+    runs-on: macos-latest
+    steps:
+      - name: Get version from tag
+        id: version
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: Download DMGs and compute sha256
+        run: |
+          gh release download "$TAG" --repo Pentium133/sessonix --pattern "*.dmg" --dir dmgs
+          echo "sha_arm=$(shasum -a 256 dmgs/*_aarch64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_x64=$(shasum -a 256 dmgs/*_x64.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: Pentium133/homebrew-sessonix
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Cask formula
+        run: |
+          cat > Casks/sessonix.rb << 'CASK'
+          cask "sessonix" do
+            version "${{ steps.version.outputs.version }}"
+
+            on_arm do
+              url "https://github.com/Pentium133/sessonix/releases/download/v#{version}/Sessonix_#{version}_aarch64.dmg"
+              sha256 "${{ steps.sha.outputs.sha_arm }}"
+            end
+
+            on_intel do
+              url "https://github.com/Pentium133/sessonix/releases/download/v#{version}/Sessonix_#{version}_x64.dmg"
+              sha256 "${{ steps.sha.outputs.sha_x64 }}"
+            end
+
+            name "Sessonix"
+            desc "Agent Mission Control — run multiple AI coding agents in parallel"
+            homepage "https://github.com/Pentium133/sessonix"
+
+            app "Sessonix.app"
+
+            zap trash: [
+              "~/Library/Application Support/com.sessonix.desktop",
+              "~/Library/Caches/com.sessonix.desktop",
+              "~/Library/WebKit/com.sessonix.desktop",
+            ]
+          end
+          CASK
+          # Remove leading whitespace from heredoc
+          sed -i '' 's/^          //' Casks/sessonix.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/sessonix.rb
+          git commit -m "Update Sessonix to ${{ steps.version.outputs.version }}"
+          git push

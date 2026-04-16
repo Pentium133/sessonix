@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#131620"/>
+      <stop offset="100%" stop-color="#0B0E14"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5ABFEF"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="blur1">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="blur2">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Three status dots — smaller, more padding from top -->
+  <circle cx="430" cy="260" r="22" fill="#C4A7E7"/>
+  <circle cx="512" cy="260" r="22" fill="#7DD681"/>
+  <circle cx="594" cy="260" r="22" fill="#5ABFEF"/>
+
+  <!-- Angular brackets — pulled inward -->
+  <g filter="url(#glow)">
+    <!-- Left chevron > -->
+    <text x="160" y="620" font-family="SF Mono, Menlo, monospace" font-size="280" font-weight="700" fill="url(#accent)" opacity="0.35">&gt;</text>
+    <!-- Right chevron < -->
+    <text x="720" y="620" font-family="SF Mono, Menlo, monospace" font-size="280" font-weight="700" fill="url(#accent)" opacity="0.35">&lt;</text>
+  </g>
+
+  <!-- Layered S — depth effect shifting right-down -->
+  <!-- Deepest layer (most offset, most blur) -->
+  <text x="530" y="700" font-family="SF Pro Rounded, SF Pro Display, system-ui" font-size="480" font-weight="700"
+        fill="#38BDF8" opacity="0.15" filter="url(#blur1)" text-anchor="middle">S</text>
+  <!-- Mid layer -->
+  <text x="515" y="685" font-family="SF Pro Rounded, SF Pro Display, system-ui" font-size="480" font-weight="700"
+        fill="#38BDF8" opacity="0.3" filter="url(#blur2)" text-anchor="middle">S</text>
+  <!-- Front layer (sharp) -->
+  <text x="500" y="665" font-family="SF Pro Rounded, SF Pro Display, system-ui" font-size="480" font-weight="700"
+        fill="url(#accent)" filter="url(#glow)" text-anchor="middle">S</text>
+</svg>

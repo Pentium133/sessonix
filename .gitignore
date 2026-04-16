@@ -1,0 +1,27 @@
+# Node
+node_modules/
+dist/
+
+# Rust
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# gstack
+.gstack/
+.sessonix-worktrees/
+
+# Project management (local only)
+pm/

@@ -1,0 +1,762 @@
+mod adapters;
+mod db;
+#[allow(dead_code)]
+mod error;
+mod git_manager;
+mod hooks;
+mod jsonl;
+mod pty_manager;
+mod ring_buffer;
+mod session_manager;
+#[allow(dead_code)]
+mod types;
+
+use adapters::AdapterRegistry;
+use session_manager::{CreateSessionParams, SessionManager};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use tauri::{Emitter, Manager};
+
+static FORCE_EXIT: AtomicBool = AtomicBool::new(false);
+static LAST_UPDATE_CHECK: Mutex<Option<Instant>> = Mutex::new(None);
+
+use types::CreateSessionRequest;
+
+#[tauri::command]
+fn create_session(
+    state: tauri::State<'_, SessionManager>,
+    app: tauri::AppHandle,
+    request: CreateSessionRequest,
+) -> Result<u32, String> {
+    state
+        .create_session(CreateSessionParams {
+            command: &request.command,
+            args: &request.args,
+            working_dir: &request.working_dir,
+            cols: 120,
+            rows: 30,
+            app_handle: app,
+            task_name: request.task_name.as_deref().unwrap_or(&request.command),
+            agent_type: request.agent_type.as_deref().unwrap_or("custom"),
+            worktree_path: request.worktree_path.as_deref(),
+            base_commit: request.base_commit.as_deref(),
+        })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn write_to_session(state: tauri::State<'_, SessionManager>, id: u32, data: Vec<u8>) -> Result<(), String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+    session.write_input(&data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn resize_session(
+    state: tauri::State<'_, SessionManager>,
+    id: u32,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+    session.resize(cols, rows).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn kill_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+    session.kill().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn detach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+    session
+        .is_attached
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    // Drain and discard: data was already sent via events while attached.
+    // This ensures reattach only returns data accumulated during detach.
+    session.ring_buffer.lock().unwrap().drain();
+    Ok(())
+}
+
+#[tauri::command]
+fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<Vec<u8>, String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+    let was_detached = !session
+        .is_attached
+        .load(std::sync::atomic::Ordering::Relaxed);
+    // Only drain if session was detached — otherwise data was already sent via events
+    let buffered = if was_detached {
+        session.ring_buffer.lock().unwrap().drain()
+    } else {
+        Vec::new()
+    };
+    session
+        .is_attached
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(buffered)
+}
+
+#[tauri::command]
+fn get_session_count(state: tauri::State<'_, SessionManager>) -> Result<usize, String> {
+    Ok(state.pty.session_count())
+}
+
+#[tauri::command]
+fn get_session_status(
+    state: tauri::State<'_, SessionManager>,
+    adapters: tauri::State<'_, AdapterRegistry>,
+    id: u32,
+    agent_type: Option<String>,
+    working_dir: Option<String>,
+    agent_session_id: Option<String>,
+) -> Result<types::AgentStatus, String> {
+    let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
+
+    // For Claude: try hook-based status first (real-time), then JSONL, then terminal
+    if agent_type.as_deref() == Some("claude") {
+        // 1. Check hook status file (fastest, real-time from Claude events)
+        if let Some(hook) = hooks::read_hook_status(id) {
+            let (state_val, status_line) = match hook.status.as_str() {
+                "running" => (types::SessionStatus::Running, "Working...".to_string()),
+                "idle" => (types::SessionStatus::Idle, "Waiting for input".to_string()),
+                "waiting_permission" => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
+                "exited" => (types::SessionStatus::Running, "Session ending...".to_string()),
+                _ => (types::SessionStatus::Running, String::new()),
+            };
+            return Ok(types::AgentStatus { state: state_val, status_line });
+        }
+
+        // 2. Check JSONL tail — only when we have a session UUID.
+        // Without a UUID (e.g. --continue sessions), find_session_file returns the most
+        // recently modified file in the project dir, which may belong to a different session
+        // that is actively running. Skip JSONL lookup in that case; fall to terminal detection.
+        if let (Some(wd), Some(sid)) = (working_dir.as_ref(), agent_session_id.as_ref()) {
+            let jsonl_path = jsonl::find_session_file_by_id(wd, sid);
+
+            if let Some(ref path) = jsonl_path {
+                let status = jsonl::detect_status(path);
+                let (state_val, status_line) = match status {
+                    jsonl::ClaudeStatus::Active => (types::SessionStatus::Running, "Working...".to_string()),
+                    jsonl::ClaudeStatus::Idle => (types::SessionStatus::Idle, "Waiting for input".to_string()),
+                    jsonl::ClaudeStatus::WaitingPermission => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
+                    jsonl::ClaudeStatus::Error(msg) => (types::SessionStatus::Error, msg),
+                    jsonl::ClaudeStatus::Unknown => {
+                        // Fall back to terminal-based detection
+                        let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+                        if let Some(adapter) = adapters.get("claude") {
+                            let s = adapter.extract_status(&lines);
+                            (s.state, s.status_line)
+                        } else {
+                            (types::SessionStatus::Running, String::new())
+                        }
+                    }
+                };
+                return Ok(types::AgentStatus { state: state_val, status_line });
+            }
+        }
+    }
+
+    // For shell/custom sessions: use kernel-level foreground process detection (tcgetpgrp).
+    // `is_foreground_idle()` returns None only when shell_pid or process_group_leader() is
+    // unavailable — theoretically unreachable on Unix (process_id always returns Some).
+    let is_shell = matches!(agent_type.as_deref(), Some("shell" | "custom"));
+    if is_shell {
+        let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+
+        return match session.is_foreground_idle() {
+            Some(true) => Ok(types::AgentStatus {
+                state: types::SessionStatus::Idle,
+                status_line: String::new(),
+            }),
+            Some(false) => {
+                // Compute status_line only when needed (Running path)
+                let last_line = lines.last().map(|s| adapters::strip_ansi(s)).unwrap_or_default();
+                Ok(types::AgentStatus {
+                    state: types::SessionStatus::Running,
+                    status_line: adapters::truncate(last_line.trim(), 80),
+                })
+            }
+            None => {
+                // Fallback to terminal heuristic if tcgetpgrp unavailable (Windows / edge cases)
+                let at = agent_type.as_deref().unwrap_or("custom");
+                if let Some(adapter) = adapters.get(at) {
+                    Ok(adapter.extract_status(&lines))
+                } else {
+                    Ok(types::AgentStatus {
+                        state: types::SessionStatus::Running,
+                        status_line: String::new(),
+                    })
+                }
+            }
+        };
+    }
+
+    // Fallback: terminal-based status extraction for other agent types
+    let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+    if let Some(ref at) = agent_type {
+        if let Some(adapter) = adapters.get(at) {
+            return Ok(adapter.extract_status(&lines));
+        }
+    }
+
+    Ok(types::AgentStatus {
+        state: types::SessionStatus::Running,
+        status_line: adapters::strip_ansi(lines.last().map(|s| s.as_str()).unwrap_or("")),
+    })
+}
+
+#[derive(serde::Serialize)]
+struct SessionCostInfo {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_tokens: u64,
+    model: String,
+    cost_usd: f64,
+    turns: u32,
+}
+
+#[tauri::command]
+fn get_session_cost(
+    working_dir: String,
+    agent_session_id: Option<String>,
+) -> Result<SessionCostInfo, String> {
+    let jsonl_path = if let Some(ref sid) = agent_session_id {
+        jsonl::find_session_file_by_id(&working_dir, sid)
+    } else {
+        jsonl::find_session_file(&working_dir)
+    };
+
+    let path = jsonl_path.ok_or_else(|| "No JSONL session file found".to_string())?;
+    let cost = jsonl::compute_cost(&path);
+
+    Ok(SessionCostInfo {
+        input_tokens: cost.input_tokens,
+        output_tokens: cost.output_tokens,
+        cache_read_tokens: cost.cache_read_tokens,
+        cache_write_tokens: cost.cache_write_tokens,
+        model: cost.model,
+        cost_usd: cost.cost_usd,
+        turns: cost.turns,
+    })
+}
+
+#[tauri::command]
+fn get_available_agents(adapters: tauri::State<'_, AdapterRegistry>) -> Result<Vec<String>, String> {
+    Ok(adapters.available_types().into_iter().map(String::from).collect())
+}
+
+// --- Project/Session persistence commands ---
+
+#[tauri::command]
+fn add_project(state: tauri::State<'_, SessionManager>, name: String, path: String) -> Result<i64, String> {
+    state.add_project(&name, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn remove_project(state: tauri::State<'_, SessionManager>, path: String) -> Result<(), String> {
+    state.remove_project(&path).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct ProjectInfo {
+    id: i64,
+    name: String,
+    path: String,
+}
+
+#[derive(serde::Serialize)]
+struct SessionInfo {
+    id: i64,
+    pty_id: Option<u32>,
+    agent_type: String,
+    task_name: String,
+    working_dir: String,
+    status: String,
+    status_line: String,
+    exit_code: Option<i32>,
+    launch_command: String,
+    launch_args: String,
+    started_at: String,
+    agent_session_id: Option<String>,
+    sort_order: u32,
+    worktree_path: Option<String>,
+    base_commit: Option<String>,
+}
+
+#[tauri::command]
+fn list_projects(state: tauri::State<'_, SessionManager>) -> Result<Vec<ProjectInfo>, String> {
+    let projects = state.list_projects().map_err(|e| e.to_string())?;
+    Ok(projects
+        .into_iter()
+        .map(|p| ProjectInfo {
+            id: p.id,
+            name: p.name,
+            path: p.path,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn list_sessions(
+    state: tauri::State<'_, SessionManager>,
+    project_path: String,
+) -> Result<Vec<SessionInfo>, String> {
+    let sessions = state
+        .list_sessions_for_project(&project_path)
+        .map_err(|e| e.to_string())?;
+    Ok(sessions
+        .into_iter()
+        .map(|s| SessionInfo {
+            id: s.id,
+            pty_id: s.pty_id,
+            agent_type: s.agent_type,
+            task_name: s.task_name,
+            working_dir: s.working_dir,
+            status: s.status,
+            status_line: s.status_line,
+            exit_code: s.exit_code,
+            launch_command: s.launch_command,
+            launch_args: s.launch_args,
+            started_at: s.started_at,
+            agent_session_id: s.agent_session_id,
+            sort_order: s.sort_order,
+            worktree_path: s.worktree_path,
+            base_commit: s.base_commit,
+        })
+        .collect())
+}
+
+#[tauri::command]
+fn save_scrollback(
+    state: tauri::State<'_, SessionManager>,
+    pty_id: u32,
+    data: String,
+) -> Result<(), String> {
+    state
+        .db
+        .save_scrollback(pty_id, &data)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_session(state: tauri::State<'_, SessionManager>, pty_id: u32) -> Result<(), String> {
+    state
+        .db
+        .delete_session_by_pty_id(pty_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reorder_session(
+    state: tauri::State<'_, SessionManager>,
+    pty_id: u32,
+    new_sort_order: u32,
+) -> Result<(), String> {
+    state
+        .db
+        .reorder_session(pty_id, new_sort_order)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_sort_order(
+    state: tauri::State<'_, SessionManager>,
+    pty_id: u32,
+    sort_order: u32,
+) -> Result<(), String> {
+    state.db.set_sort_order(pty_id, sort_order).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn notify_session_exit(state: tauri::State<'_, SessionManager>, pty_id: u32) -> Result<(), String> {
+    state.on_session_exit(pty_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_scrollback(
+    state: tauri::State<'_, SessionManager>,
+    pty_id: u32,
+) -> Result<Option<String>, String> {
+    state
+        .db
+        .get_scrollback(pty_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_setting(state: tauri::State<'_, SessionManager>, key: String) -> Result<Option<String>, String> {
+    state.db.get_setting(&key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_setting(state: tauri::State<'_, SessionManager>, key: String, value: String) -> Result<(), String> {
+    state.db.set_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_all_settings(state: tauri::State<'_, SessionManager>) -> Result<Vec<(String, String)>, String> {
+    state.db.get_all_settings().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn install_claude_hooks() -> Result<bool, String> {
+    hooks::install_hooks()
+}
+
+#[tauri::command]
+fn check_claude_hooks() -> Result<bool, String> {
+    Ok(hooks::check_installed())
+}
+
+#[tauri::command]
+fn get_running_session_count(sm: tauri::State<'_, SessionManager>) -> Result<u32, String> {
+    Ok(sm.pty.running_count())
+}
+
+/// Check whether a given CLI binary is available in PATH.
+fn is_in_path(name: &str) -> bool {
+    let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    std::process::Command::new(cmd)
+        .arg(name)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Detect which AI agent CLIs are installed (claude, codex, gemini).
+/// Returns a map of agent name → found in PATH.
+#[tauri::command]
+async fn create_worktree(working_dir: String, branch_name: String) -> Result<git_manager::WorktreeInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_manager::create_worktree(&working_dir, &branch_name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn remove_worktree(worktree_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_manager::remove_worktree(&worktree_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn clear_worktree_path(state: tauri::State<'_, SessionManager>, pty_id: u32) -> Result<(), String> {
+    state.db.clear_worktree_path(pty_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_git_status(working_dir: String) -> Result<git_manager::GitStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_manager::get_git_status(&working_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn detect_agents() -> std::collections::HashMap<String, bool> {
+    ["claude", "codex", "gemini"]
+        .iter()
+        .map(|&name| (name.to_string(), is_in_path(name)))
+        .collect()
+}
+
+#[tauri::command]
+fn force_exit(app: tauri::AppHandle) {
+    FORCE_EXIT.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    html_url: String,
+    current_version: String,
+}
+
+/// Compare two semver strings (e.g. "0.8.11" vs "0.9.0").
+/// Returns true if `available` is strictly newer than `current`.
+fn is_newer_version(current: &str, available: &str) -> bool {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').filter_map(|p| p.parse().ok()).collect()
+    };
+    let cur = parse(current);
+    let avail = parse(available);
+    for i in 0..3 {
+        let c = cur.get(i).copied().unwrap_or(0);
+        let a = avail.get(i).copied().unwrap_or(0);
+        if a > c { return true; }
+        if a < c { return false; }
+    }
+    false
+}
+
+#[tauri::command]
+async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
+    // Rate limit: skip if checked less than 10 minutes ago (unless forced).
+    // Single lock scope for atomic read+stamp to prevent concurrent duplicate calls.
+    if !force {
+        if let Ok(mut guard) = LAST_UPDATE_CHECK.lock() {
+            if let Some(last) = *guard {
+                if last.elapsed().as_secs() < 600 {
+                    return Ok(None);
+                }
+            }
+            // Stamp now to prevent concurrent calls while network request is in-flight
+            *guard = Some(Instant::now());
+        }
+    }
+
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(String, String), String> {
+        let mut response = ureq::get("https://api.github.com/repos/Pentium133/sessonix/releases/latest")
+            .header("User-Agent", &format!("Sessonix/{}", current_version))
+            .header("Accept", "application/vnd.github.v3+json")
+            .call()
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        let body: serde_json::Value = response.body_mut().read_json()
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        let tag_name = body["tag_name"]
+            .as_str()
+            .ok_or_else(|| "Missing tag_name in response".to_string())?;
+        let html_url = body["html_url"]
+            .as_str()
+            .ok_or_else(|| "Missing html_url in response".to_string())?;
+
+        // Validate URL points to GitHub (defense-in-depth against supply chain attacks)
+        if !html_url.starts_with("https://github.com/") {
+            return Err("Unexpected release URL domain".to_string());
+        }
+
+        // Strip 'v' prefix from tag
+        let version = tag_name.strip_prefix('v').unwrap_or(tag_name);
+
+        Ok((version.to_string(), html_url.to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // On network/parse error, clear the timestamp so next attempt can try again
+    let (version, html_url) = match result {
+        Ok(v) => v,
+        Err(e) => {
+            if let Ok(mut guard) = LAST_UPDATE_CHECK.lock() {
+                *guard = None;
+            }
+            return Err(e);
+        }
+    };
+
+    if is_newer_version(current_version, &version) {
+        Ok(Some(UpdateInfo {
+            version,
+            html_url,
+            current_version: current_version.to_string(),
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::is_newer_version;
+
+    #[test]
+    fn newer_patch() {
+        assert!(is_newer_version("0.8.11", "0.8.12"));
+    }
+
+    #[test]
+    fn newer_minor() {
+        assert!(is_newer_version("0.8.11", "0.9.0"));
+    }
+
+    #[test]
+    fn newer_major() {
+        assert!(is_newer_version("0.8.11", "1.0.0"));
+    }
+
+    #[test]
+    fn equal_versions() {
+        assert!(!is_newer_version("0.8.11", "0.8.11"));
+    }
+
+    #[test]
+    fn older_version() {
+        assert!(!is_newer_version("0.9.0", "0.8.11"));
+    }
+
+    #[test]
+    fn short_version() {
+        assert!(is_newer_version("1.0", "1.1.0"));
+        assert!(!is_newer_version("1.1.0", "1.0"));
+    }
+
+    #[test]
+    fn same_major_minor_different_patch() {
+        assert!(is_newer_version("1.2.3", "1.2.4"));
+        assert!(!is_newer_version("1.2.4", "1.2.3"));
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.sessonix.app");
+
+    let db = match db::Db::open(&app_dir) {
+        Ok(db) => Arc::new(db),
+        Err(e) => {
+            log::error!("Failed to open database: {}", e);
+            // Retry with fresh DB file
+            let db_path = app_dir.join("sessonix.db");
+            if db_path.exists() {
+                let _ = std::fs::remove_file(&db_path);
+            }
+            Arc::new(
+                db::Db::open(&app_dir)
+                    .expect("Failed to open database even after reset"),
+            )
+        }
+    };
+
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(SessionManager::new(db))
+        .manage(AdapterRegistry::new())
+        .setup(|app| {
+            // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
+            use tauri::menu::*;
+
+            let settings_item = MenuItemBuilder::with_id("app-settings", "Settings...")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
+
+            let update_item = MenuItemBuilder::with_id("check-updates", "Check for Updates...")
+                .build(app)?;
+
+            let quit_item = MenuItemBuilder::with_id("app-quit", "Quit Sessonix")
+                .accelerator("CmdOrCtrl+Q")
+                .build(app)?;
+
+            let app_submenu = SubmenuBuilder::new(app, "Sessonix")
+                .item(&PredefinedMenuItem::about(app, Some("About Sessonix"), None)?)
+                .separator()
+                .item(&settings_item)
+                .item(&update_item)
+                .separator()
+                .item(&PredefinedMenuItem::hide(app, None)?)
+                .item(&PredefinedMenuItem::hide_others(app, None)?)
+                .item(&PredefinedMenuItem::show_all(app, None)?)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+
+            let edit_submenu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&app_submenu)
+                .item(&edit_submenu)
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            app.on_menu_event(move |app_handle, event| {
+                if event.id() == settings_item.id() {
+                    let _ = app_handle.emit("open-settings", ());
+                    return;
+                }
+                if event.id() == update_item.id() {
+                    let _ = app_handle.emit("check-for-updates", ());
+                    return;
+                }
+                if event.id() == quit_item.id() {
+                    if FORCE_EXIT.load(Ordering::SeqCst) {
+                        app_handle.exit(0);
+                        return;
+                    }
+                    let sm = app_handle.state::<SessionManager>();
+                    if sm.pty.running_count() > 0 {
+                        let _ = app_handle.emit("confirm-exit", ());
+                    } else {
+                        app_handle.exit(0);
+                    }
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            create_session,
+            write_to_session,
+            resize_session,
+            kill_session,
+            detach_session,
+            attach_session,
+            get_session_count,
+            get_session_status,
+            get_available_agents,
+            get_session_cost,
+            install_claude_hooks,
+            check_claude_hooks,
+            add_project,
+            remove_project,
+            list_projects,
+            list_sessions,
+            save_scrollback,
+            get_scrollback,
+            delete_session,
+            notify_session_exit,
+            reorder_session,
+            set_sort_order,
+            get_running_session_count,
+            force_exit,
+            get_setting,
+            set_setting,
+            get_all_settings,
+            detect_agents,
+            get_git_status,
+            create_worktree,
+            remove_worktree,
+            clear_worktree_path,
+            check_for_update,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+            if FORCE_EXIT.load(Ordering::SeqCst) {
+                return; // User confirmed, let it exit
+            }
+            let sm = app_handle.state::<SessionManager>();
+            if sm.pty.running_count() > 0 {
+                api.prevent_exit();
+                let _ = app_handle.emit("confirm-exit", ());
+            }
+        }
+    });
+}

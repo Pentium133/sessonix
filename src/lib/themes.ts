@@ -1,0 +1,429 @@
+import type { ITheme } from "@xterm/xterm";
+
+export const THEME_IDS = [
+  "sessonix-dark",
+  "sessonix-light",
+  "tokyo-night",
+  "dracula",
+  "nord",
+  "monokai-pro",
+  "one-dark",
+  "catppuccin-mocha",
+] as const;
+
+export type ThemeId = (typeof THEME_IDS)[number];
+
+export interface ThemeDefinition {
+  id: ThemeId;
+  label: string;
+  type: "dark" | "light";
+  cssVars: Record<string, string>;
+  terminal: ITheme;
+}
+
+// ── Sessonix Dark (default) ──────────────────────────
+
+const sessonixDark: ThemeDefinition = {
+  id: "sessonix-dark",
+  label: "Sessonix Dark",
+  type: "dark",
+  cssVars: {
+    "--bg": "#0B0E14",
+    "--surface": "#11151C",
+    "--hover": "#1A1F2B",
+    "--border": "#1D2433",
+    "--text": "#BAC5D6",
+    "--text-bright": "#E0E6F0",
+    "--text-dim": "#4A5670",
+    "--accent": "#38BDF8",
+    "--accent-muted": "rgba(56, 189, 248, 0.12)",
+    "--success": "#7DD681",
+    "--warning": "#F0B45A",
+    "--error": "#F07178",
+    "--claude": "#C4A7E7",
+    "--codex": "#7DD681",
+    "--gemini": "#5ABFEF",
+  },
+  terminal: {
+    background: "#0B0E14",
+    foreground: "#BAC5D6",
+    cursor: "#38BDF8",
+    cursorAccent: "#0B0E14",
+    selectionBackground: "#1D3A5C",
+    black: "#11151C",
+    red: "#F07178",
+    green: "#7DD681",
+    yellow: "#F0B45A",
+    blue: "#38BDF8",
+    magenta: "#C4A7E7",
+    cyan: "#5ABFEF",
+    white: "#BAC5D6",
+    brightBlack: "#4A5670",
+    brightRed: "#F07178",
+    brightGreen: "#7DD681",
+    brightYellow: "#F0B45A",
+    brightBlue: "#38BDF8",
+    brightMagenta: "#C4A7E7",
+    brightCyan: "#5ABFEF",
+    brightWhite: "#E0E6F0",
+  },
+};
+
+// ── Sessonix Light ───────────────────────────────────
+
+const sessonixLight: ThemeDefinition = {
+  id: "sessonix-light",
+  label: "Sessonix Light",
+  type: "light",
+  cssVars: {
+    "--bg": "#F2F4F7",
+    "--surface": "#FFFFFF",
+    "--hover": "#E8EBF0",
+    "--border": "#D4D8E0",
+    "--text": "#3A4352",
+    "--text-bright": "#1A1F2B",
+    "--text-dim": "#7A8599",
+    "--accent": "#0C99DB",
+    "--accent-muted": "rgba(12, 153, 219, 0.10)",
+    "--success": "#2E8B3E",
+    "--warning": "#C47F17",
+    "--error": "#D1363B",
+    "--claude": "#8B5FC7",
+    "--codex": "#2E8B3E",
+    "--gemini": "#0C7EBF",
+  },
+  terminal: {
+    background: "#F2F4F7",
+    foreground: "#3A4352",
+    cursor: "#0C99DB",
+    cursorAccent: "#F2F4F7",
+    selectionBackground: "#B8D4F0",
+    black: "#3A4352",
+    red: "#D1363B",
+    green: "#2E8B3E",
+    yellow: "#C47F17",
+    blue: "#0C99DB",
+    magenta: "#8B5FC7",
+    cyan: "#0C7EBF",
+    white: "#F2F4F7",
+    brightBlack: "#7A8599",
+    brightRed: "#D1363B",
+    brightGreen: "#2E8B3E",
+    brightYellow: "#C47F17",
+    brightBlue: "#0C99DB",
+    brightMagenta: "#8B5FC7",
+    brightCyan: "#0C7EBF",
+    brightWhite: "#1A1F2B",
+  },
+};
+
+// ── Tokyo Night ──────────────────────────────────────
+
+const tokyoNight: ThemeDefinition = {
+  id: "tokyo-night",
+  label: "Tokyo Night",
+  type: "dark",
+  cssVars: {
+    "--bg": "#1a1b26",
+    "--surface": "#16161e",
+    "--hover": "#292e42",
+    "--border": "#3b4261",
+    "--text": "#a9b1d6",
+    "--text-bright": "#c0caf5",
+    "--text-dim": "#565f89",
+    "--accent": "#7aa2f7",
+    "--accent-muted": "rgba(122, 162, 247, 0.12)",
+    "--success": "#9ece6a",
+    "--warning": "#e0af68",
+    "--error": "#f7768e",
+    "--claude": "#bb9af7",
+    "--codex": "#9ece6a",
+    "--gemini": "#7dcfff",
+  },
+  terminal: {
+    background: "#1a1b26",
+    foreground: "#a9b1d6",
+    cursor: "#c0caf5",
+    cursorAccent: "#1a1b26",
+    selectionBackground: "#2e3c64",
+    black: "#15161e",
+    red: "#f7768e",
+    green: "#9ece6a",
+    yellow: "#e0af68",
+    blue: "#7aa2f7",
+    magenta: "#bb9af7",
+    cyan: "#7dcfff",
+    white: "#a9b1d6",
+    brightBlack: "#414868",
+    brightRed: "#f7768e",
+    brightGreen: "#9ece6a",
+    brightYellow: "#e0af68",
+    brightBlue: "#7aa2f7",
+    brightMagenta: "#bb9af7",
+    brightCyan: "#7dcfff",
+    brightWhite: "#c0caf5",
+  },
+};
+
+// ── Dracula ──────────────────────────────────────────
+
+const dracula: ThemeDefinition = {
+  id: "dracula",
+  label: "Dracula",
+  type: "dark",
+  cssVars: {
+    "--bg": "#282a36",
+    "--surface": "#21222c",
+    "--hover": "#343746",
+    "--border": "#44475a",
+    "--text": "#f8f8f2",
+    "--text-bright": "#ffffff",
+    "--text-dim": "#6272a4",
+    "--accent": "#bd93f9",
+    "--accent-muted": "rgba(189, 147, 249, 0.12)",
+    "--success": "#50fa7b",
+    "--warning": "#f1fa8c",
+    "--error": "#ff5555",
+    "--claude": "#bd93f9",
+    "--codex": "#50fa7b",
+    "--gemini": "#8be9fd",
+  },
+  terminal: {
+    background: "#282a36",
+    foreground: "#f8f8f2",
+    cursor: "#f8f8f2",
+    cursorAccent: "#282a36",
+    selectionBackground: "#44475a",
+    black: "#21222c",
+    red: "#ff5555",
+    green: "#50fa7b",
+    yellow: "#f1fa8c",
+    blue: "#bd93f9",
+    magenta: "#ff79c6",
+    cyan: "#8be9fd",
+    white: "#f8f8f2",
+    brightBlack: "#6272a4",
+    brightRed: "#ff6e6e",
+    brightGreen: "#69ff94",
+    brightYellow: "#ffffa5",
+    brightBlue: "#d6acff",
+    brightMagenta: "#ff92df",
+    brightCyan: "#a4ffff",
+    brightWhite: "#ffffff",
+  },
+};
+
+// ── Nord ─────────────────────────────────────────────
+
+const nord: ThemeDefinition = {
+  id: "nord",
+  label: "Nord",
+  type: "dark",
+  cssVars: {
+    "--bg": "#2e3440",
+    "--surface": "#3b4252",
+    "--hover": "#434c5e",
+    "--border": "#4c566a",
+    "--text": "#d8dee9",
+    "--text-bright": "#eceff4",
+    "--text-dim": "#616e88",
+    "--accent": "#88c0d0",
+    "--accent-muted": "rgba(136, 192, 208, 0.12)",
+    "--success": "#a3be8c",
+    "--warning": "#ebcb8b",
+    "--error": "#bf616a",
+    "--claude": "#b48ead",
+    "--codex": "#a3be8c",
+    "--gemini": "#5e81ac",
+  },
+  terminal: {
+    background: "#2e3440",
+    foreground: "#d8dee9",
+    cursor: "#d8dee9",
+    cursorAccent: "#2e3440",
+    selectionBackground: "#434c5e",
+    black: "#3b4252",
+    red: "#bf616a",
+    green: "#a3be8c",
+    yellow: "#ebcb8b",
+    blue: "#81a1c1",
+    magenta: "#b48ead",
+    cyan: "#88c0d0",
+    white: "#e5e9f0",
+    brightBlack: "#4c566a",
+    brightRed: "#bf616a",
+    brightGreen: "#a3be8c",
+    brightYellow: "#ebcb8b",
+    brightBlue: "#81a1c1",
+    brightMagenta: "#b48ead",
+    brightCyan: "#8fbcbb",
+    brightWhite: "#eceff4",
+  },
+};
+
+// ── Monokai Pro ──────────────────────────────────────
+
+const monokaiPro: ThemeDefinition = {
+  id: "monokai-pro",
+  label: "Monokai Pro",
+  type: "dark",
+  cssVars: {
+    "--bg": "#2d2a2e",
+    "--surface": "#221f22",
+    "--hover": "#403e41",
+    "--border": "#5b5960",
+    "--text": "#fcfcfa",
+    "--text-bright": "#ffffff",
+    "--text-dim": "#727072",
+    "--accent": "#a9dc76",
+    "--accent-muted": "rgba(169, 220, 118, 0.12)",
+    "--success": "#a9dc76",
+    "--warning": "#ffd866",
+    "--error": "#ff6188",
+    "--claude": "#ab9df2",
+    "--codex": "#a9dc76",
+    "--gemini": "#78dce8",
+  },
+  terminal: {
+    background: "#2d2a2e",
+    foreground: "#fcfcfa",
+    cursor: "#fcfcfa",
+    cursorAccent: "#2d2a2e",
+    selectionBackground: "#403e41",
+    black: "#403e41",
+    red: "#ff6188",
+    green: "#a9dc76",
+    yellow: "#ffd866",
+    blue: "#fc9867",
+    magenta: "#ab9df2",
+    cyan: "#78dce8",
+    white: "#fcfcfa",
+    brightBlack: "#727072",
+    brightRed: "#ff6188",
+    brightGreen: "#a9dc76",
+    brightYellow: "#ffd866",
+    brightBlue: "#fc9867",
+    brightMagenta: "#ab9df2",
+    brightCyan: "#78dce8",
+    brightWhite: "#ffffff",
+  },
+};
+
+// ── One Dark ─────────────────────────────────────────
+
+const oneDark: ThemeDefinition = {
+  id: "one-dark",
+  label: "One Dark",
+  type: "dark",
+  cssVars: {
+    "--bg": "#282c34",
+    "--surface": "#21252b",
+    "--hover": "#2c313c",
+    "--border": "#3e4452",
+    "--text": "#abb2bf",
+    "--text-bright": "#d7dae0",
+    "--text-dim": "#5c6370",
+    "--accent": "#61afef",
+    "--accent-muted": "rgba(97, 175, 239, 0.12)",
+    "--success": "#98c379",
+    "--warning": "#e5c07b",
+    "--error": "#e06c75",
+    "--claude": "#c678dd",
+    "--codex": "#98c379",
+    "--gemini": "#56b6c2",
+  },
+  terminal: {
+    background: "#282c34",
+    foreground: "#abb2bf",
+    cursor: "#528bff",
+    cursorAccent: "#282c34",
+    selectionBackground: "#3e4451",
+    black: "#3f4451",
+    red: "#e06c75",
+    green: "#98c379",
+    yellow: "#e5c07b",
+    blue: "#61afef",
+    magenta: "#c678dd",
+    cyan: "#56b6c2",
+    white: "#d7dae0",
+    brightBlack: "#4b5263",
+    brightRed: "#e06c75",
+    brightGreen: "#98c379",
+    brightYellow: "#e5c07b",
+    brightBlue: "#61afef",
+    brightMagenta: "#c678dd",
+    brightCyan: "#56b6c2",
+    brightWhite: "#ffffff",
+  },
+};
+
+// ── Catppuccin Mocha ─────────────────────────────────
+
+const catppuccinMocha: ThemeDefinition = {
+  id: "catppuccin-mocha",
+  label: "Catppuccin Mocha",
+  type: "dark",
+  cssVars: {
+    "--bg": "#1e1e2e",
+    "--surface": "#181825",
+    "--hover": "#313244",
+    "--border": "#45475a",
+    "--text": "#cdd6f4",
+    "--text-bright": "#e4e8f4",
+    "--text-dim": "#6c7086",
+    "--accent": "#89b4fa",
+    "--accent-muted": "rgba(137, 180, 250, 0.12)",
+    "--success": "#a6e3a1",
+    "--warning": "#f9e2af",
+    "--error": "#f38ba8",
+    "--claude": "#cba6f7",
+    "--codex": "#a6e3a1",
+    "--gemini": "#89dceb",
+  },
+  terminal: {
+    background: "#1e1e2e",
+    foreground: "#cdd6f4",
+    cursor: "#f5e0dc",
+    cursorAccent: "#1e1e2e",
+    selectionBackground: "#45475a",
+    black: "#45475a",
+    red: "#f38ba8",
+    green: "#a6e3a1",
+    yellow: "#f9e2af",
+    blue: "#89b4fa",
+    magenta: "#cba6f7",
+    cyan: "#89dceb",
+    white: "#bac2de",
+    brightBlack: "#585b70",
+    brightRed: "#f38ba8",
+    brightGreen: "#a6e3a1",
+    brightYellow: "#f9e2af",
+    brightBlue: "#89b4fa",
+    brightMagenta: "#cba6f7",
+    brightCyan: "#89dceb",
+    brightWhite: "#a6adc8",
+  },
+};
+
+// ── Exports ──────────────────────────────────────────
+
+export const THEMES: ThemeDefinition[] = [
+  sessonixDark,
+  sessonixLight,
+  tokyoNight,
+  dracula,
+  nord,
+  monokaiPro,
+  oneDark,
+  catppuccinMocha,
+];
+
+export function getThemeById(id: string): ThemeDefinition | undefined {
+  return THEMES.find((t) => t.id === id);
+}
+
+export function resolveSystemTheme(): ThemeId {
+  return window.matchMedia("(prefers-color-scheme: light)").matches
+    ? "sessonix-light"
+    : "sessonix-dark";
+}

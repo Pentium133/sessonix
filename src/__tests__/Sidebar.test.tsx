@@ -1,0 +1,312 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import Sidebar from "../components/Sidebar";
+import { useSessionStore } from "../store/sessionStore";
+import { useProjectStore } from "../store/projectStore";
+import { useUiStore } from "../store/uiStore";
+import type { Project, Session } from "../lib/types";
+import * as git from "../lib/git";
+
+const mockHandleRemoveSession = vi.fn();
+const mockHandleRelaunchSession = vi.fn();
+const mockHandleForkSession = vi.fn();
+
+vi.mock("../hooks/useSessionActions", () => ({
+  useSessionActions: () => ({
+    handleRemoveSession: mockHandleRemoveSession,
+    handleRelaunchSession: mockHandleRelaunchSession,
+    handleForkSession: mockHandleForkSession,
+  }),
+}));
+
+vi.mock("../components/Toast", () => ({
+  showToast: vi.fn(),
+}));
+
+vi.mock("../lib/git", async () => {
+  const actual = await vi.importActual<typeof import("../lib/git")>("../lib/git");
+  return {
+    ...actual,
+    getGitStatus: vi.fn().mockResolvedValue({
+      is_repo: false,
+      branch: null,
+      changed_files: 0,
+      modified: 0,
+      added: 0,
+      deleted: 0,
+      head_sha: null,
+      is_worktree: false,
+    }),
+  };
+});
+
+function makeSessions(count: number, projectPath: string): Session[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: i + 1,
+    command: "claude",
+    args: [],
+    working_dir: projectPath,
+    task_name: `Session ${i + 1}`,
+    agent_type: "claude" as const,
+    status: i === 0 ? "running" as const : "exited" as const,
+    status_line: "",
+    created_at: Date.now(),
+    sortOrder: i + 1,
+    gitStatus: null,
+    worktree_path: null,
+    base_commit: null,
+  }));
+}
+
+function setupStores(
+  projects: Project[],
+  sessions: Session[],
+  activeSessionId: number | null = null,
+  collapsed = false,
+) {
+  useProjectStore.setState({ projects, activeProjectPath: projects[0]?.path ?? null });
+  useSessionStore.setState({
+    sessions,
+    activeSessionId,
+    loaded: true,
+  });
+  useUiStore.setState({ sidebarCollapsed: collapsed, sidebarWidth: 260 });
+}
+
+describe("Sidebar (SessionPanel)", () => {
+  beforeEach(() => {
+    setupStores([], []);
+    vi.clearAllMocks();
+    vi.mocked(git.getGitStatus).mockResolvedValue({
+      is_repo: false,
+      branch: null,
+      changed_files: 0,
+      modified: 0,
+      added: 0,
+      deleted: 0,
+      head_sha: null,
+      is_worktree: false,
+    });
+  });
+
+  it("shows empty state when no active project", () => {
+    render(<Sidebar />);
+    expect(screen.getByText(/Select a project/)).toBeTruthy();
+  });
+
+  it("returns null when sidebar is collapsed", () => {
+    setupStores([], [], null, true);
+    const { container } = render(<Sidebar />);
+    expect(container.querySelector(".sidebar")).toBeNull();
+  });
+
+  it("renders project name as header", () => {
+    const projects: Project[] = [
+      { path: "/home/user/app", name: "app", sessions: [1] },
+    ];
+    const sessions = makeSessions(1, "/home/user/app");
+    setupStores(projects, sessions);
+    render(<Sidebar />);
+    expect(screen.getByText("app")).toBeTruthy();
+    expect(screen.getByText("Session 1")).toBeTruthy();
+  });
+
+  it("shows only sessions for active project", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1] },
+      { path: "/tmp/other", name: "other", sessions: [2] },
+    ];
+    const sessions: Session[] = [
+      ...makeSessions(1, "/tmp/app"),
+      {
+        id: 2, command: "claude", args: [], working_dir: "/tmp/other",
+        task_name: "Other Session", agent_type: "claude", status: "running",
+        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null,
+      },
+    ];
+    setupStores(projects, sessions);
+    render(<Sidebar />);
+    expect(screen.getByText("Session 1")).toBeTruthy();
+    expect(screen.queryByText("Other Session")).toBeNull();
+  });
+
+  it("calls switchSession on click", () => {
+    const switchSession = vi.fn();
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1] },
+    ];
+    const sessions = makeSessions(1, "/tmp/app");
+    setupStores(projects, sessions);
+    useSessionStore.setState({ switchSession });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Session 1"));
+    expect(switchSession).toHaveBeenCalledWith(1);
+  });
+
+  it("shows Relaunch button for exited sessions", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1, 2] },
+    ];
+    const sessions = makeSessions(2, "/tmp/app");
+    setupStores(projects, sessions);
+    render(<Sidebar />);
+    expect(screen.getByText("Relaunch")).toBeTruthy();
+  });
+
+  it("shows Kill button for running sessions", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1] },
+    ];
+    const sessions = makeSessions(1, "/tmp/app");
+    setupStores(projects, sessions);
+    render(<Sidebar />);
+    expect(screen.getByText("Kill")).toBeTruthy();
+  });
+
+  it("shows status badges", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1, 2] },
+    ];
+    const sessions = makeSessions(2, "/tmp/app");
+    setupStores(projects, sessions);
+    render(<Sidebar />);
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Exited")).toBeTruthy();
+  });
+
+  it("shows the worktree tree icon in git header for worktree projects", async () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1] },
+    ];
+    const sessions = makeSessions(1, "/tmp/app");
+    setupStores(projects, sessions);
+    vi.mocked(git.getGitStatus).mockResolvedValue({
+      is_repo: true,
+      branch: "feature/tree-icon",
+      changed_files: 0,
+      modified: 0,
+      added: 0,
+      deleted: 0,
+      head_sha: "abc123",
+      is_worktree: true,
+    });
+
+    const { container } = render(<Sidebar />);
+
+    expect(await screen.findByText("feature/tree-icon")).toBeTruthy();
+    expect(container.querySelector(".sidebar-git-info .session-wt-icon")).toBeTruthy();
+  });
+
+  it("highlights active session", () => {
+    const projects: Project[] = [
+      { path: "/tmp/app", name: "app", sessions: [1, 2] },
+    ];
+    const sessions = makeSessions(2, "/tmp/app");
+    setupStores(projects, sessions, 1);
+    const { container } = render(<Sidebar />);
+    const activeItem = container.querySelector(".session-item.active");
+    expect(activeItem).toBeTruthy();
+    expect(activeItem?.textContent).toContain("Session 1");
+  });
+
+  describe("Kill confirmation", () => {
+    function renderRunningSession() {
+      const projects: Project[] = [
+        { path: "/tmp/app", name: "app", sessions: [1] },
+      ];
+      const sessions = makeSessions(1, "/tmp/app"); // session 1 = running
+      setupStores(projects, sessions);
+      return render(<Sidebar />);
+    }
+
+    it("shows confirm/cancel on Kill click", () => {
+      const { container } = renderRunningSession();
+      expect(container.querySelector(".kill-btn")).toBeTruthy();
+      expect(container.querySelector(".kill-confirm-btn")).toBeNull();
+
+      fireEvent.click(container.querySelector(".kill-btn")!);
+
+      expect(container.querySelector(".kill-confirm-btn")).toBeTruthy();
+      expect(container.querySelector(".kill-cancel-btn")).toBeTruthy();
+      expect(container.querySelector(".kill-btn")).toBeNull();
+    });
+
+    it("restores Kill button on Cancel", () => {
+      const { container } = renderRunningSession();
+      fireEvent.click(container.querySelector(".kill-btn")!);
+      fireEvent.click(container.querySelector(".kill-cancel-btn")!);
+
+      expect(container.querySelector(".kill-btn")).toBeTruthy();
+      expect(container.querySelector(".kill-confirm-btn")).toBeNull();
+    });
+
+    it("calls handleRemoveSession on confirm Kill", () => {
+      const { container } = renderRunningSession();
+      fireEvent.click(container.querySelector(".kill-btn")!);
+      fireEvent.click(container.querySelector(".kill-confirm-btn")!);
+
+      expect(mockHandleRemoveSession).toHaveBeenCalledWith(1);
+    });
+
+    it("Shift+click Kill bypasses confirmation", () => {
+      const { container } = renderRunningSession();
+      fireEvent.click(container.querySelector(".kill-btn")!, { shiftKey: true });
+
+      expect(mockHandleRemoveSession).toHaveBeenCalledWith(1);
+      expect(container.querySelector(".kill-confirm-btn")).toBeNull();
+    });
+  });
+
+  describe("Fork button", () => {
+    it("shows Fork for running claude sessions", () => {
+      const projects: Project[] = [
+        { path: "/tmp/app", name: "app", sessions: [1] },
+      ];
+      const sessions = makeSessions(1, "/tmp/app"); // claude, running
+      setupStores(projects, sessions);
+      const { container } = render(<Sidebar />);
+
+      expect(container.querySelector(".fork-btn")).toBeTruthy();
+    });
+
+    it("does not show Fork for non-claude sessions", () => {
+      const projects: Project[] = [
+        { path: "/tmp/app", name: "app", sessions: [1] },
+      ];
+      const sessions: Session[] = [{
+        id: 1,
+        command: "codex",
+        args: [],
+        working_dir: "/tmp/app",
+        task_name: "Codex Session",
+        agent_type: "codex",
+        status: "running",
+        status_line: "",
+        created_at: Date.now(),
+        sortOrder: 1,
+        gitStatus: null,
+        worktree_path: null,
+        base_commit: null,
+      }];
+      setupStores(projects, sessions);
+      const { container } = render(<Sidebar />);
+
+      expect(container.querySelector(".fork-btn")).toBeNull();
+    });
+
+    it("calls handleForkSession on Fork confirm", () => {
+      const projects: Project[] = [
+        { path: "/tmp/app", name: "app", sessions: [1] },
+      ];
+      const sessions = makeSessions(1, "/tmp/app");
+      setupStores(projects, sessions);
+      const { container } = render(<Sidebar />);
+
+      fireEvent.click(container.querySelector(".fork-btn")!);
+      expect(container.querySelector(".kill-confirm-btn")).toBeTruthy();
+
+      fireEvent.click(container.querySelector(".kill-confirm-btn")!);
+      expect(mockHandleForkSession).toHaveBeenCalledWith(sessions[0]);
+    });
+  });
+});
