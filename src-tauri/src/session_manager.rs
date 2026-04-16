@@ -58,7 +58,6 @@ pub fn opencode_db_path() -> Option<std::path::PathBuf> {
 /// Returns `None` when the DB is absent, query fails, or no matching session
 /// exists. Guards against absurdly long IDs (>256 chars) and records missing
 /// the `ses_` prefix to avoid picking up corrupted or unrelated rows.
-#[allow(dead_code)] // Wired into create_session in Phase 5
 pub fn read_opencode_session_id(working_dir: &str, not_before_millis: i64) -> Option<String> {
     let db_path = opencode_db_path()?;
     read_opencode_session_id_from_path(&db_path, working_dir, not_before_millis)
@@ -92,6 +91,25 @@ pub fn read_opencode_session_id_from_path(
         return None;
     }
     Some(id)
+}
+
+/// Pull the `ses_xxx` OpenCode session ID out of resume-style args.
+///
+/// Expects args shaped like `["run", "--quiet", "--session", "ses_...", ...]`
+/// (or the same pattern with the flag anywhere in the list). Returns `None`
+/// for `--continue` — in that case the ID is only known after polling, and
+/// callers should not prematurely store a stale value.
+///
+/// Guards: the candidate ID must start with `ses_` — anything else is
+/// treated as absent so polling takes over.
+pub fn extract_opencode_resume_id(args: &[String]) -> Option<String> {
+    let idx = args.iter().position(|a| a == "--session")?;
+    let candidate = args.get(idx + 1)?;
+    if candidate.starts_with("ses_") {
+        Some(candidate.clone())
+    } else {
+        None
+    }
 }
 
 pub struct CreateSessionParams<'a> {
@@ -158,6 +176,7 @@ impl SessionManager {
         // Skip if --resume (relaunch with existing ID) or --continue (resume last session).
         let is_claude = params.agent_type == "claude";
         let is_codex = params.agent_type == "codex";
+        let is_opencode = params.agent_type == "opencode";
         let is_resume = params.args.iter().any(|a| a == "--resume");
         let is_continue = params.args.iter().any(|a| a == "--continue");
         let agent_session_id = if is_claude && !is_resume && !is_continue {
@@ -179,6 +198,15 @@ impl SessionManager {
             None
         };
 
+        // OpenCode resume: args carry `--session <ses_id>` (specific) or
+        // `--continue` (last session in cwd). For `--continue` the ID is
+        // unknown until the agent registers it, so polling fills it in.
+        let opencode_resume_id = if is_opencode {
+            extract_opencode_resume_id(params.args)
+        } else {
+            None
+        };
+
         let mut args: Vec<String> = params.args.to_vec();
         if let Some(ref sid) = agent_session_id {
             args.push("--session-id".to_string());
@@ -187,10 +215,12 @@ impl SessionManager {
 
         // Record timestamp immediately before spawning so polling can exclude
         // pre-existing threads in the same working directory.
-        let launch_ts = std::time::SystemTime::now()
+        // Codex stores created_at in seconds; OpenCode stores time_created in ms.
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+            .unwrap_or_default();
+        let launch_ts = now.as_secs() as i64;
+        let launch_ts_ms = now.as_millis() as i64;
 
         // If task_id is set, look up the task's worktree_path and use it for both
         // the PTY cwd and the session's denormalized worktree_path. This keeps task
@@ -220,6 +250,8 @@ impl SessionManager {
                 .map(|s| s.to_string())
         } else if let Some(ref cid) = codex_resume_id {
             Some(cid.clone())
+        } else if let Some(ref oid) = opencode_resume_id {
+            Some(oid.clone())
         } else {
             agent_session_id
         };
@@ -263,6 +295,35 @@ impl SessionManager {
                     }
                 }
                 log::warn!("Could not capture Codex thread ID for pty {} after 5s", pty_id);
+            });
+        }
+
+        // For OpenCode sessions where the ID isn't yet known (new session, or
+        // `--continue` which defers ID selection to the CLI): poll OpenCode's
+        // SQLite to pick up the `ses_xxx` assigned after launch. Same backoff
+        // as Codex. Polling runs against the session's actual cwd (task worktree
+        // when applicable), not the project root — that's what OpenCode stores
+        // in `session.directory`.
+        if is_opencode && opencode_resume_id.is_none() {
+            let db = self.db.clone();
+            let wd = pty_cwd.to_string();
+            std::thread::spawn(move || {
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if let Some(session_id) = read_opencode_session_id(&wd, launch_ts_ms) {
+                        if let Err(e) = db.update_agent_session_id(pty_id, &session_id) {
+                            log::warn!("Failed to save OpenCode session ID: {}", e);
+                        } else {
+                            log::info!(
+                                "Captured OpenCode session ID: {} for pty {}",
+                                session_id,
+                                pty_id
+                            );
+                        }
+                        return;
+                    }
+                }
+                log::warn!("Could not capture OpenCode session ID for pty {} after 5s", pty_id);
             });
         }
 
@@ -483,5 +544,50 @@ mod opencode_session_id_tests {
             s.ends_with(".local/share/opencode/opencode.db"),
             "unexpected default opencode db path: {s}"
         );
+    }
+}
+
+#[cfg(test)]
+mod extract_opencode_resume_id_tests {
+    use super::*;
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn finds_session_id_after_session_flag() {
+        let a = args(&["run", "--quiet", "--session", "ses_abc", "continue the task"]);
+        assert_eq!(
+            extract_opencode_resume_id(&a).as_deref(),
+            Some("ses_abc"),
+        );
+    }
+
+    #[test]
+    fn continue_only_returns_none() {
+        // --continue defers the ID until polling — do not premature-store.
+        let a = args(&["run", "--quiet", "--continue"]);
+        assert!(extract_opencode_resume_id(&a).is_none());
+    }
+
+    #[test]
+    fn new_session_returns_none() {
+        let a = args(&["run", "--quiet", "fix bug"]);
+        assert!(extract_opencode_resume_id(&a).is_none());
+    }
+
+    #[test]
+    fn rejects_non_ses_value_after_session_flag() {
+        // --session followed by something that isn't a valid ses_ prefix
+        // shouldn't leak into the stored_session_id.
+        let a = args(&["run", "--quiet", "--session", "bogus-value"]);
+        assert!(extract_opencode_resume_id(&a).is_none());
+    }
+
+    #[test]
+    fn session_flag_at_end_with_no_value_returns_none() {
+        let a = args(&["run", "--quiet", "--session"]);
+        assert!(extract_opencode_resume_id(&a).is_none());
     }
 }
