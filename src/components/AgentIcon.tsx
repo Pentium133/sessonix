@@ -39,6 +39,16 @@ function GeminiIcon({ color, size }: { color: string; size: number }) {
   );
 }
 
+// OpenCode — paired code brackets `< >`
+function OpenCodeIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="5,4 2,8 5,12" />
+      <polyline points="11,4 14,8 11,12" />
+    </svg>
+  );
+}
+
 // Shell — terminal prompt
 function ShellIcon({ color, size }: { color: string; size: number }) {
   return (
@@ -62,6 +72,7 @@ const ICON_MAP: Record<string, React.FC<{ color: string; size: number }>> = {
   claude: ClaudeIcon,
   codex: CodexIcon,
   gemini: GeminiIcon,
+  opencode: OpenCodeIcon,
   shell: ShellIcon,
   custom: CustomIcon,
 };
