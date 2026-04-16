@@ -34,14 +34,14 @@ function formatDuration(ms: number): string {
   return `${hr}h ${remainMin}m`;
 }
 
-function useDuration(createdAt: number, isAlive: boolean): string {
+function useDuration(createdAt: number, isRunning: boolean): string {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!isAlive) return;
+    if (!isRunning) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isAlive]);
-  const elapsed = (isAlive ? now : Date.now()) - createdAt;
+  }, [isRunning]);
+  const elapsed = (isRunning ? now : Date.now()) - createdAt;
   return formatDuration(Math.max(0, elapsed));
 }
 
@@ -64,7 +64,8 @@ export default function SessionItem({
   const [showForkConfirm, setShowForkConfirm] = useState(false);
 
   const isAlive = session.status !== "exited";
-  const duration = useDuration(session.created_at, isAlive);
+  const isRunning = session.status === "running";
+  const duration = useDuration(session.created_at, isRunning);
   const agentColor = AGENT_COLORS[session.agent_type] ?? AGENT_COLORS.custom;
 
   const handleKill = (e: React.MouseEvent) => {
