@@ -390,6 +390,56 @@ fn get_scrollback(
         .map_err(|e| e.to_string())
 }
 
+// --- Templates ---
+
+#[derive(serde::Serialize)]
+struct TemplateInfo {
+    id: i64,
+    name: String,
+    project_path: String,
+    agent: String,
+    initial_prompt: Option<String>,
+    skip_permissions: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct CreateTemplateRequest {
+    name: String,
+    project_path: String,
+    agent: String,
+    initial_prompt: Option<String>,
+    skip_permissions: bool,
+}
+
+#[tauri::command]
+fn create_template(state: tauri::State<'_, SessionManager>, request: CreateTemplateRequest) -> Result<i64, String> {
+    state.db.insert_template(
+        &request.name,
+        &request.project_path,
+        &request.agent,
+        request.initial_prompt.as_deref(),
+        request.skip_permissions,
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_templates(state: tauri::State<'_, SessionManager>, project_path: String) -> Result<Vec<TemplateInfo>, String> {
+    let rows = state.db.list_templates(&project_path).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|t| TemplateInfo {
+        id: t.id,
+        name: t.name,
+        project_path: t.project_path,
+        agent: t.agent,
+        initial_prompt: t.initial_prompt,
+        skip_permissions: t.skip_permissions,
+    }).collect())
+}
+
+#[tauri::command]
+fn delete_template(state: tauri::State<'_, SessionManager>, id: i64) -> Result<(), String> {
+    state.db.delete_template(id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_setting(state: tauri::State<'_, SessionManager>, key: String) -> Result<Option<String>, String> {
     state.db.get_setting(&key).map_err(|e| e.to_string())
@@ -746,6 +796,9 @@ pub fn run() {
             remove_worktree,
             clear_worktree_path,
             check_for_update,
+            create_template,
+            list_templates,
+            delete_template,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

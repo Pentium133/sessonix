@@ -404,6 +404,7 @@ function App() {
           isOpen={true}
           onClose={closeLauncher}
           projectPath={launcher.projectPath}
+          prefill={launcher.prefill}
           onLaunch={handleLaunchSession}
         />
       )}

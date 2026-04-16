@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
+import { useTemplateStore } from "../store/templateStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { getGitStatus } from "../lib/git";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
+import TemplateItem from "./TemplateItem";
 import WorktreeIcon from "./WorktreeIcon";
 import type { GitStatus } from "../lib/types";
 
@@ -31,6 +33,10 @@ export default function Sidebar() {
 
   const { handleRemoveSession, handleRelaunchSession, handleForkSession } = useSessionActions();
 
+  const templates = useTemplateStore((s) => s.templates);
+  const loadTemplates = useTemplateStore((s) => s.load);
+  const removeTemplate = useTemplateStore((s) => s.remove);
+
   const [projectGit, setProjectGit] = useState<GitStatus | null>(null);
 
   useEffect(() => {
@@ -42,6 +48,10 @@ export default function Sidebar() {
     const interval = setInterval(fetch, 5_000);
     return () => clearInterval(interval);
   }, [activeProjectPath]);
+
+  useEffect(() => {
+    if (activeProjectPath) loadTemplates(activeProjectPath);
+  }, [activeProjectPath, loadTemplates]);
 
   const activeProject = projects.find((p) => p.path === activeProjectPath);
   const projectSessions = sessions
@@ -219,6 +229,42 @@ export default function Sidebar() {
           ))
         )}
       </div>
+      {templates.length > 0 && (
+        <div className="sidebar-templates">
+          <div className="sidebar-templates-header">Templates</div>
+          {templates.map((t) => (
+            <TemplateItem
+              key={t.id}
+              template={t}
+              onRun={() => {
+                useSessionStore.getState().addSession({
+                  command: t.agent === "shell" ? "zsh" : t.agent,
+                  working_dir: t.project_path,
+                  task_name: t.name,
+                  agent_type: t.agent as import("../lib/types").AgentType,
+                  prompt: t.initial_prompt ?? undefined,
+                }).catch((err) => showToast(String(err), "error"));
+              }}
+              onEdit={() => {
+                useUiStore.getState().openLauncher({
+                  open: true,
+                  mode: "session",
+                  projectPath: t.project_path,
+                  prefill: {
+                    agent: t.agent,
+                    prompt: t.initial_prompt ?? "",
+                    taskName: t.name,
+                    skipPermissions: t.skip_permissions,
+                  },
+                });
+              }}
+              onDelete={() => {
+                removeTemplate(t.id).catch((err) => showToast(String(err), "error"));
+              }}
+            />
+          ))}
+        </div>
+      )}
     </aside>
   );
 }

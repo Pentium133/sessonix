@@ -999,7 +999,8 @@ body {
 
 .launcher-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: calc(var(--space) * 2);
   margin-top: calc(var(--space) * 2);
 }
 
@@ -1011,6 +1012,7 @@ body {
   color: var(--text-dim);
   font-size: 12px;
   cursor: pointer;
+  margin-right: auto;
 }
 
 .launcher-back:hover {
@@ -1036,6 +1038,132 @@ body {
 .launcher-launch:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.launcher-save-template {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 2) calc(var(--space) * 3);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.launcher-save-template:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Sidebar templates section */
+.sidebar-templates {
+  border-top: 1px solid var(--border);
+  padding: calc(var(--space) * 2) calc(var(--space) * 3);
+  flex-shrink: 0;
+}
+
+.sidebar-templates-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: calc(var(--space) * 2);
+}
+
+/* Template item */
+.template-item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius);
+  margin-bottom: 2px;
+  padding: calc(var(--space) * 1.5) 0;
+}
+
+.template-item:hover {
+  background: var(--hover);
+}
+
+.template-badge {
+  width: 3px;
+  align-self: stretch;
+  background: var(--agent-color, var(--text-dim));
+  border-radius: var(--radius) 0 0 var(--radius);
+  flex-shrink: 0;
+}
+
+.template-body {
+  flex: 1;
+  min-width: 0;
+  padding: 0 calc(var(--space) * 2);
+}
+
+.template-row-top {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--space) * 1.5);
+}
+
+.template-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-prompt {
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.template-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: calc(var(--space) * 2);
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.template-item:hover .template-actions {
+  opacity: 1;
+}
+
+.template-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 1;
+}
+
+.template-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.template-btn-run:hover {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.template-btn-delete:hover {
+  color: var(--error);
+  border-color: var(--error);
 }
 
 .launcher-project-badge {

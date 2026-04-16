@@ -51,6 +51,18 @@ pub struct InsertSession<'a> {
     pub initial_prompt: Option<&'a str>,
 }
 
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TemplateRow {
+    pub id: i64,
+    pub name: String,
+    pub project_path: String,
+    pub agent: String,
+    pub initial_prompt: Option<String>,
+    pub skip_permissions: bool,
+    pub created_at: String,
+}
+
 impl Db {
     pub fn open(app_dir: &PathBuf) -> Result<Self, rusqlite::Error> {
         std::fs::create_dir_all(app_dir).ok();
@@ -167,6 +179,19 @@ impl Db {
                 "ALTER TABLE sessions ADD COLUMN initial_prompt TEXT;",
             )?;
         }
+
+        // Templates table
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS templates (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                project_path    TEXT NOT NULL,
+                agent           TEXT NOT NULL,
+                initial_prompt  TEXT,
+                skip_permissions INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );"
+        )?;
 
         Ok(())
     }
@@ -469,6 +494,70 @@ impl Db {
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // --- Templates ---
+
+    pub fn insert_template(
+        &self,
+        name: &str,
+        project_path: &str,
+        agent: &str,
+        initial_prompt: Option<&str>,
+        skip_permissions: bool,
+    ) -> Result<i64, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO templates (name, project_path, agent, initial_prompt, skip_permissions)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, project_path, agent, initial_prompt, skip_permissions as i32],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_templates(&self, project_path: &str) -> Result<Vec<TemplateRow>, rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, project_path, agent, initial_prompt, skip_permissions, created_at
+             FROM templates WHERE project_path = ?1 ORDER BY name ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![project_path], |row| {
+                Ok(TemplateRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    project_path: row.get(2)?,
+                    agent: row.get(3)?,
+                    initial_prompt: row.get(4)?,
+                    skip_permissions: row.get::<_, i32>(5)? != 0,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_template(&self, id: i64) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM templates WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn update_template(
+        &self,
+        id: i64,
+        name: &str,
+        agent: &str,
+        initial_prompt: Option<&str>,
+        skip_permissions: bool,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE templates SET name = ?1, agent = ?2, initial_prompt = ?3, skip_permissions = ?4 WHERE id = ?5",
+            params![name, agent, initial_prompt, skip_permissions as i32, id],
+        )?;
+        Ok(())
     }
 
     // --- Settings ---

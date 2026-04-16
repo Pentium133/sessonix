@@ -6,6 +6,8 @@ import { getGitStatus, createWorktree } from "../lib/git";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
+import { useTemplateStore } from "../store/templateStore";
+import type { LauncherPrefill } from "../store/uiStore";
 type ClaudeSessionMode = "new" | "continue" | "resume";
 type CodexSessionMode = "new" | "resume" | "last";
 
@@ -76,6 +78,7 @@ interface NewSessionProps {
   isOpen: boolean;
   onClose: () => void;
   projectPath: string;
+  prefill?: LauncherPrefill;
   onLaunch: (params: {
     command: string;
     args: string[];
@@ -111,19 +114,22 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const folderPickerTriggered = useRef(false);
   const skipPermsAutoSet = useRef(false);
 
+  const prefill = props.mode === "session" ? props.prefill : undefined;
+
   // Reset state when opening
   useEffect(() => {
     if (isOpen) {
-      setTaskName("");
-      setCustomCommand("");
       const defaultType = useSettingsStore.getState().defaultAgent;
-      setSelectedAgent(AGENTS.find((a) => a.type === defaultType) ?? AGENTS[1]);
+      const agentType = prefill?.agent ?? defaultType;
+      setSelectedAgent(AGENTS.find((a) => a.type === agentType) ?? AGENTS[1]);
+      setTaskName(prefill?.taskName ?? "");
+      setCustomCommand("");
       setClaudeSessionMode("new");
       setCodexSessionMode("new");
-      setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
+      setSkipPermissions(prefill?.skipPermissions ?? useSettingsStore.getState().claudeSkipPermissions);
       skipPermsAutoSet.current = false;
       setResumeSessionId("");
-      setPrompt("");
+      setPrompt(prefill?.prompt ?? "");
       setExtraArgs("");
       setUseWorktree(false);
       setWorktreeBranch("");
@@ -436,6 +442,25 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           <button className="launcher-back" onClick={onClose}>
             Cancel
           </button>
+          {prompt.trim() && (
+            <button
+              className="launcher-save-template"
+              onClick={() => {
+                const name = taskName.trim() || `${selectedAgent.label} template`;
+                useTemplateStore.getState().add({
+                  name,
+                  project_path: props.projectPath,
+                  agent: selectedAgent.type,
+                  initial_prompt: prompt.trim() || undefined,
+                  skip_permissions: skipPermissions,
+                }).then(() => {
+                  showToast(`Template "${name}" saved`, "success");
+                }).catch((err) => showToast(String(err), "error"));
+              }}
+            >
+              Save Template
+            </button>
+          )}
           <button
             className="launcher-launch"
             onClick={handleLaunch}

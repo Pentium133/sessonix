@@ -187,6 +187,35 @@ export async function getAllSettings(): Promise<[string, string][]> {
   return invoke<[string, string][]>("get_all_settings");
 }
 
+// --- Templates ---
+
+export interface TemplateInfo {
+  id: number;
+  name: string;
+  project_path: string;
+  agent: string;
+  initial_prompt: string | null;
+  skip_permissions: boolean;
+}
+
+export async function createTemplate(request: {
+  name: string;
+  project_path: string;
+  agent: string;
+  initial_prompt?: string;
+  skip_permissions: boolean;
+}): Promise<number> {
+  return invoke<number>("create_template", { request });
+}
+
+export async function listTemplates(projectPath: string): Promise<TemplateInfo[]> {
+  return invoke<TemplateInfo[]>("list_templates", { projectPath });
+}
+
+export async function deleteTemplate(id: number): Promise<void> {
+  return invoke<void>("delete_template", { id });
+}
+
 // --- Updates ---
 
 export interface UpdateInfo {
