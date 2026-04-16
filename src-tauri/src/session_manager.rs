@@ -52,6 +52,7 @@ pub struct CreateSessionParams<'a> {
     pub agent_type: &'a str,
     pub worktree_path: Option<&'a str>,
     pub base_commit: Option<&'a str>,
+    pub prompt: Option<&'a str>,
 }
 
 impl SessionManager {
@@ -175,6 +176,7 @@ impl SessionManager {
                 agent_session_id: stored_session_id.as_deref(),
                 worktree_path: params.worktree_path,
                 base_commit: params.base_commit,
+                initial_prompt: params.prompt,
             })
             .map_err(|e| AppError::Db(e.to_string()))?;
 
@@ -199,6 +201,22 @@ impl SessionManager {
                 }
                 log::warn!("Could not capture Codex thread ID for pty {} after 5s", pty_id);
             });
+        }
+
+        // For shell/custom: write prompt to stdin after a delay so the shell has time to init.
+        let is_shell = matches!(params.agent_type, "shell" | "custom");
+        if is_shell {
+            if let Some(prompt) = params.prompt {
+                let prompt = format!("{}\n", prompt);
+                if let Ok(session) = self.pty.get_session(pty_id) {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(2000));
+                        if let Err(e) = session.write_input(prompt.as_bytes()) {
+                            log::warn!("Failed to write prompt to shell stdin: {}", e);
+                        }
+                    });
+                }
+            }
         }
 
         Ok(pty_id)

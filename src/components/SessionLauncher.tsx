@@ -22,7 +22,8 @@ function buildArgs(
   claudeMode: ClaudeSessionMode,
   codexMode: CodexSessionMode,
   skipPerms: boolean,
-  resumeSessionId: string
+  resumeSessionId: string,
+  prompt: string
 ): string[] {
   if (agentType === "claude") {
     const args: string[] = [];
@@ -30,6 +31,9 @@ function buildArgs(
     if (claudeMode === "continue") args.push("--continue");
     if (claudeMode === "resume" && resumeSessionId.trim()) {
       args.push("--resume", resumeSessionId.trim());
+    }
+    if (prompt) {
+      args.push("-p", prompt);
     }
     // "new" → session_manager.rs generates --session-id <uuid>
     return args;
@@ -41,9 +45,21 @@ function buildArgs(
     } else if (codexMode === "last") {
       args.push("resume", "--last");
     }
+    // For new Codex sessions, prompt is passed as positional arg
+    if (prompt && codexMode === "new") {
+      args.push(prompt);
+    }
     // "new" → session_manager.rs polls Codex SQLite to capture thread ID
     return args;
   }
+  if (agentType === "gemini") {
+    const args: string[] = [];
+    if (prompt) {
+      args.push(prompt);
+    }
+    return args;
+  }
+  // shell/custom: prompt handled via backend stdin write, not args
   return [];
 }
 
@@ -67,6 +83,7 @@ interface NewSessionProps {
     agent_type: AgentType;
     worktree_path?: string;
     base_commit?: string;
+    prompt?: string;
   }) => void;
 }
 
@@ -82,6 +99,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [codexSessionMode, setCodexSessionMode] = useState<CodexSessionMode>("new");
   const [skipPermissions, setSkipPermissions] = useState(false);
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [extraArgs, setExtraArgs] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
   const [worktreeBranch, setWorktreeBranch] = useState("");
@@ -102,6 +120,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       setCodexSessionMode("new");
       setSkipPermissions(useSettingsStore.getState().claudeSkipPermissions);
       setResumeSessionId("");
+      setPrompt("");
       setExtraArgs("");
       setUseWorktree(false);
       setWorktreeBranch("");
@@ -172,7 +191,8 @@ export default function SessionLauncher(props: SessionLauncherProps) {
     if (!command) { launchingRef.current = false; return; }
 
     const name = taskName.trim() || `${selectedAgent.label} session`;
-    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, skipPermissions, resumeSessionId);
+    const trimmedPrompt = prompt.trim();
+    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, skipPermissions, resumeSessionId, trimmedPrompt);
 
     // Append custom extra arguments (split by spaces, respecting quotes)
     if (extraArgs.trim()) {
@@ -207,6 +227,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       agent_type: selectedAgent.type,
       worktree_path: worktreePath,
       base_commit: baseCommit,
+      prompt: trimmedPrompt || undefined,
     });
     launchingRef.current = false;
     onClose();
@@ -266,6 +287,23 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           onChange={(e) => setTaskName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}
         />
+
+        {/* Initial prompt */}
+        {selectedAgent.type !== "custom" && (
+          <textarea
+            className="launcher-input launcher-prompt"
+            placeholder={selectedAgent.type === "shell" ? "Initial command (optional)" : "Enter a task for the agent... (optional)"}
+            value={prompt}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              // Auto-check skip permissions for Claude when prompt is entered
+              if (selectedAgent.type === "claude" && e.target.value.trim()) {
+                setSkipPermissions(true);
+              }
+            }}
+            rows={3}
+          />
+        )}
 
         {/* Claude-specific options */}
         {selectedAgent.type === "claude" && (

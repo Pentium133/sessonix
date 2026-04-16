@@ -308,6 +308,7 @@ function App() {
       agent_type: AgentType;
       worktree_path?: string;
       base_commit?: string;
+      prompt?: string;
     }) => {
       try {
         await useSessionStore.getState().addSession({
@@ -318,6 +319,7 @@ function App() {
           agent_type: params.agent_type,
           worktree_path: params.worktree_path,
           base_commit: params.base_commit,
+          prompt: params.prompt,
         });
       } catch (err) {
         showToast(String(err), "error");

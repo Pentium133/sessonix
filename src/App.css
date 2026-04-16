@@ -988,6 +988,14 @@ body {
   color: var(--text-dim);
 }
 
+.launcher-prompt {
+  resize: vertical;
+  min-height: calc(var(--space) * 18);
+  max-height: calc(var(--space) * 48);
+  font-family: var(--font-mono);
+  line-height: 1.4;
+}
+
 .launcher-worktree-section {
   border-top: 1px solid var(--border);
   padding-top: calc(var(--space) * 2);

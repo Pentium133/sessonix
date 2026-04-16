@@ -34,6 +34,7 @@ interface SessionState {
     replaceId?: number;
     worktree_path?: string;
     base_commit?: string;
+    prompt?: string;
   }) => Promise<number>;
   removeSession: (id: number) => Promise<void>;
   removeSessions: (ids: number[]) => void; // bulk remove — for project removal cleanup
@@ -105,6 +106,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               gitStatus: null,
               worktree_path: s.worktree_path ?? null,
               base_commit: s.base_commit ?? null,
+              initial_prompt: s.initial_prompt ?? null,
             });
           }
 
@@ -167,6 +169,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       agent_type: params.agent_type,
       worktree_path: params.worktree_path,
       base_commit: params.base_commit,
+      prompt: params.prompt,
     });
 
     if (params.replaceId != null) {
@@ -186,6 +189,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           gitStatus: null,
           worktree_path: params.worktree_path ?? null,
           base_commit: params.base_commit ?? null,
+          initial_prompt: params.prompt ?? null,
         };
         return {
           sessions: state.sessions.map((s) => (s.id === params.replaceId ? session : s)),
@@ -217,6 +221,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           gitStatus: null,
           worktree_path: params.worktree_path ?? null,
           base_commit: params.base_commit ?? null,
+          initial_prompt: params.prompt ?? null,
         };
         return {
           sessions: [...state.sessions, session],

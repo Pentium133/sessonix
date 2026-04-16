@@ -100,6 +100,7 @@ export interface SessionInfo {
   sort_order: number;
   worktree_path: string | null;
   base_commit: string | null;
+  initial_prompt: string | null;
 }
 
 export async function addProject(

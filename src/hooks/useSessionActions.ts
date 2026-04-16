@@ -61,6 +61,7 @@ export function useSessionActions() {
             working_dir: session.working_dir,
             task_name: session.task_name,
             agent_type: session.agent_type,
+            prompt: session.initial_prompt ?? undefined,
           }).catch(() => {});
         },
       }
@@ -94,6 +95,7 @@ export function useSessionActions() {
         replaceId: session.id,
         worktree_path: worktreePath,
         base_commit: baseCommit,
+        prompt: session.initial_prompt ?? undefined,
       });
     } catch (err) {
       showToast(String(err), "error");

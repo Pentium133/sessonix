@@ -46,6 +46,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     gitStatus: null,
     worktree_path: null,
     base_commit: null,
+    initial_prompt: null,
     ...overrides,
   };
 }

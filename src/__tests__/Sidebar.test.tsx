@@ -55,6 +55,7 @@ function makeSessions(count: number, projectPath: string): Session[] {
     gitStatus: null,
     worktree_path: null,
     base_commit: null,
+    initial_prompt: null,
   }));
 }
 
@@ -121,7 +122,7 @@ describe("Sidebar (SessionPanel)", () => {
       {
         id: 2, command: "claude", args: [], working_dir: "/tmp/other",
         task_name: "Other Session", agent_type: "claude", status: "running",
-        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null,
+        status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null, initial_prompt: null,
       },
     ];
     setupStores(projects, sessions);
@@ -287,6 +288,7 @@ describe("Sidebar (SessionPanel)", () => {
         gitStatus: null,
         worktree_path: null,
         base_commit: null,
+        initial_prompt: null,
       }];
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);

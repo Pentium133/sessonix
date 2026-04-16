@@ -34,6 +34,7 @@ pub struct SessionRow {
     pub sort_order: u32,
     pub worktree_path: Option<String>,
     pub base_commit: Option<String>,
+    pub initial_prompt: Option<String>,
 }
 
 pub struct InsertSession<'a> {
@@ -47,6 +48,7 @@ pub struct InsertSession<'a> {
     pub agent_session_id: Option<&'a str>,
     pub worktree_path: Option<&'a str>,
     pub base_commit: Option<&'a str>,
+    pub initial_prompt: Option<&'a str>,
 }
 
 impl Db {
@@ -156,6 +158,16 @@ impl Db {
             )?;
         }
 
+        // Migration: add initial_prompt column
+        let has_prompt_col: bool = conn
+            .prepare("SELECT initial_prompt FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_prompt_col {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN initial_prompt TEXT;",
+            )?;
+        }
+
         Ok(())
     }
 
@@ -233,9 +245,9 @@ impl Db {
             |row| row.get::<_, u32>(0),
         )?;
         conn.execute(
-            "INSERT INTO sessions (project_id, pty_id, agent_type, task_name, working_dir, launch_command, launch_args, agent_session_id, sort_order, worktree_path, base_commit)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![s.project_id, s.pty_id, s.agent_type, s.task_name, s.working_dir, s.command, s.args, s.agent_session_id, next_order, s.worktree_path, s.base_commit],
+            "INSERT INTO sessions (project_id, pty_id, agent_type, task_name, working_dir, launch_command, launch_args, agent_session_id, sort_order, worktree_path, base_commit, initial_prompt)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![s.project_id, s.pty_id, s.agent_type, s.task_name, s.working_dir, s.command, s.args, s.agent_session_id, next_order, s.worktree_path, s.base_commit, s.initial_prompt],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -320,7 +332,7 @@ impl Db {
             "SELECT id, project_id, pty_id, agent_type, task_name, working_dir,
                     status, status_line, exit_code, launch_command, launch_args,
                     started_at, ended_at, scrollback, agent_session_id, sort_order,
-                    worktree_path, base_commit
+                    worktree_path, base_commit, initial_prompt
              FROM sessions WHERE project_id = ?1 ORDER BY sort_order ASC",
         )?;
         let rows = stmt
@@ -344,6 +356,7 @@ impl Db {
                     sort_order: row.get::<_, u32>(15).unwrap_or(0),
                     worktree_path: row.get(16).unwrap_or(None),
                     base_commit: row.get(17).unwrap_or(None),
+                    initial_prompt: row.get(18).unwrap_or(None),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -424,7 +437,7 @@ impl Db {
             "SELECT s.id, s.project_id, s.pty_id, s.agent_type, s.task_name, s.working_dir,
                     s.status, s.status_line, s.exit_code, s.launch_command, s.launch_args,
                     s.started_at, s.ended_at, s.scrollback, s.agent_session_id, s.sort_order,
-                    s.worktree_path, s.base_commit
+                    s.worktree_path, s.base_commit, s.initial_prompt
              FROM sessions s
              INNER JOIN projects p ON s.project_id = p.id
              WHERE p.path = ?1
@@ -451,6 +464,7 @@ impl Db {
                     sort_order: row.get::<_, u32>(15).unwrap_or(0),
                     worktree_path: row.get(16).unwrap_or(None),
                     base_commit: row.get(17).unwrap_or(None),
+                    initial_prompt: row.get(18).unwrap_or(None),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -545,6 +559,7 @@ mod tests {
                 agent_session_id: None,
                 worktree_path: None,
                 base_commit: None,
+                initial_prompt: None,
             })
             .unwrap();
         assert!(session_id > 0);
@@ -570,13 +585,13 @@ mod tests {
             project_id: pid, pty_id: 1, agent_type: "claude", task_name: "t1",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 2, agent_type: "codex", task_name: "t2",
             working_dir: "/tmp/app", command: "codex", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         let count = db.mark_all_running_as_exited().unwrap();
@@ -594,7 +609,7 @@ mod tests {
             project_id: pid, pty_id: 42, agent_type: "claude", task_name: "test",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         // No scrollback initially
@@ -616,13 +631,13 @@ mod tests {
             project_id: pid, pty_id: 10, agent_type: "claude", task_name: "s1",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 11, agent_type: "codex", task_name: "s2",
             working_dir: "/tmp/app", command: "codex", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         assert_eq!(db.list_sessions_for_project(pid).unwrap().len(), 2);
@@ -645,13 +660,13 @@ mod tests {
             project_id: pid, pty_id: 5, agent_type: "claude", task_name: "t",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 42, agent_type: "codex", task_name: "t",
             working_dir: "/tmp/app", command: "codex", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         assert_eq!(db.max_pty_id().unwrap(), 42);
@@ -665,7 +680,7 @@ mod tests {
             project_id: pid, pty_id: 1, agent_type: "claude", task_name: "t",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: Some("uuid-abc-123"),
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         let sessions = db.list_sessions_for_project(pid).unwrap();
@@ -680,7 +695,7 @@ mod tests {
             project_id: pid, pty_id: 7, agent_type: "codex", task_name: "t",
             working_dir: "/tmp/app", command: "codex", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         // Initially no agent_session_id
@@ -702,7 +717,7 @@ mod tests {
             project_id: pid, pty_id: 1, agent_type: "claude", task_name: "t",
             working_dir: "/tmp/app", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         db.delete_project("/tmp/app").unwrap();
@@ -719,19 +734,19 @@ mod tests {
             project_id: pid, pty_id: 10, agent_type: "shell",
             task_name: "s1", working_dir: "/tmp/sortapp",
             command: "bash", args: "[]", agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 11, agent_type: "claude",
             task_name: "s2", working_dir: "/tmp/sortapp",
             command: "claude", args: "[]", agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 12, agent_type: "shell",
             task_name: "s3", working_dir: "/tmp/sortapp",
             command: "bash", args: "[]", agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         let sessions = db.list_sessions_for_project(pid).unwrap();
@@ -752,7 +767,7 @@ mod tests {
                 project_id: pid, pty_id: i * 100, agent_type: "shell",
                 task_name: &format!("session {i}"), working_dir: "/tmp/ordapp",
                 command: "bash", args: "[]", agent_session_id: None,
-                worktree_path: None, base_commit: None,
+                worktree_path: None, base_commit: None, initial_prompt: None,
             }).unwrap();
         }
 
@@ -770,13 +785,13 @@ mod tests {
             project_id: pid, pty_id: 20, agent_type: "claude", task_name: "task1",
             working_dir: "/tmp/pathapp", command: "claude", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
         db.insert_session(&InsertSession {
             project_id: pid, pty_id: 21, agent_type: "codex", task_name: "task2",
             working_dir: "/tmp/pathapp", command: "codex", args: "[]",
             agent_session_id: None,
-            worktree_path: None, base_commit: None,
+            worktree_path: None, base_commit: None, initial_prompt: None,
         }).unwrap();
 
         // Single JOIN query returns same results as two-query approach
@@ -816,7 +831,7 @@ mod tests {
                 project_id: pid, pty_id: i * 10, agent_type: "shell",
                 task_name: &format!("s{i}"), working_dir: "/tmp/reordapp",
                 command: "bash", args: "[]", agent_session_id: None,
-                worktree_path: None, base_commit: None,
+                worktree_path: None, base_commit: None, initial_prompt: None,
             }).unwrap();
         }
 

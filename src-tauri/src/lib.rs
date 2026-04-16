@@ -41,6 +41,7 @@ fn create_session(
             agent_type: request.agent_type.as_deref().unwrap_or("custom"),
             worktree_path: request.worktree_path.as_deref(),
             base_commit: request.base_commit.as_deref(),
+            prompt: request.prompt.as_deref(),
         })
         .map_err(|e| e.to_string())
 }
@@ -284,6 +285,7 @@ struct SessionInfo {
     sort_order: u32,
     worktree_path: Option<String>,
     base_commit: Option<String>,
+    initial_prompt: Option<String>,
 }
 
 #[tauri::command]
@@ -325,6 +327,7 @@ fn list_sessions(
             sort_order: s.sort_order,
             worktree_path: s.worktree_path,
             base_commit: s.base_commit,
+            initial_prompt: s.initial_prompt,
         })
         .collect())
 }
