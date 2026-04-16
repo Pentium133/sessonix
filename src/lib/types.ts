@@ -1,4 +1,4 @@
-export type AgentType = "claude" | "codex" | "gemini" | "shell" | "custom";
+export type AgentType = "claude" | "codex" | "gemini" | "opencode" | "shell" | "custom";
 
 export type SessionStatus = "running" | "idle" | "error" | "exited";
 

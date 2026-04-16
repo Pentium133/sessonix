@@ -6,6 +6,7 @@ export const AGENT_COLORS: Record<string, string> = {
   claude: "var(--claude)",
   codex: "var(--codex)",
   gemini: "var(--gemini)",
+  opencode: "var(--opencode)",
   shell: "var(--text-dim)",
   custom: "var(--text-dim)",
 };
