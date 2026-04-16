@@ -13,6 +13,10 @@ pub struct ProjectRow {
     pub path: String,
 }
 
+/// Full row of the `sessions` table. Some fields are selected for schema
+/// completeness but not currently read by any caller; removing them would
+/// reshape the struct every time a new consumer needs a previously-ignored
+/// column.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct SessionRow {
@@ -274,7 +278,6 @@ impl Db {
         Ok(rows)
     }
 
-    #[allow(dead_code)]
     pub fn find_project_id_by_path(&self, path: &str) -> Result<Option<i64>, rusqlite::Error> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id FROM projects WHERE path = ?1")?;
@@ -376,7 +379,6 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn update_session_status(
         &self,
         pty_id: u32,
@@ -398,7 +400,7 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn list_sessions_for_project(
         &self,
         project_id: i64,

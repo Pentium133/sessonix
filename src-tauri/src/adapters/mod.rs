@@ -60,6 +60,11 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Launch parameters used by `AgentAdapter::build_command`.
+///
+/// Production sessions are currently spawned with commands built on the
+/// frontend, so this struct is exercised only from adapter tests — but the
+/// trait is the eventual home for command construction on the Rust side.
 #[allow(dead_code)]
 pub struct LaunchConfig {
     pub working_dir: String,
@@ -68,6 +73,10 @@ pub struct LaunchConfig {
 }
 
 /// Agent adapter provides agent-specific command building and status extraction.
+///
+/// `extract_status` is the only method invoked by production code today;
+/// the remaining methods define the contract each adapter must satisfy and
+/// are exercised by unit tests, so the trait is marked `allow(dead_code)`.
 #[allow(dead_code)]
 pub trait AgentAdapter: Send + Sync {
     fn name(&self) -> &str;
@@ -104,7 +113,6 @@ impl AdapterRegistry {
         self.adapters.get(agent_type).map(|a| a.as_ref())
     }
 
-    #[allow(dead_code)]
     pub fn available_types(&self) -> Vec<&str> {
         self.adapters.keys().map(|s| s.as_str()).collect()
     }

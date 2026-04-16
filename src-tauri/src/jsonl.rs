@@ -77,6 +77,8 @@ struct JsonlEntry {
 
 #[derive(Deserialize)]
 struct MessageBody {
+    /// Deserialized but not read — kept so serde accepts JSONL lines where
+    /// this field is present without triggering deserialization churn.
     #[allow(dead_code)]
     role: Option<String>,
     stop_reason: Option<String>,

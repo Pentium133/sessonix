@@ -1,6 +1,5 @@
 mod adapters;
 mod db;
-#[allow(dead_code)]
 mod error;
 mod git_manager;
 mod hooks;
@@ -8,7 +7,6 @@ mod jsonl;
 mod pty_manager;
 mod ring_buffer;
 mod session_manager;
-#[allow(dead_code)]
 mod types;
 
 use adapters::AdapterRegistry;
@@ -308,7 +306,8 @@ fn list_sessions(
     project_path: String,
 ) -> Result<Vec<SessionInfo>, String> {
     let sessions = state
-        .list_sessions_for_project(&project_path)
+        .db
+        .list_sessions_by_project_path(&project_path)
         .map_err(|e| e.to_string())?;
     Ok(sessions
         .into_iter()

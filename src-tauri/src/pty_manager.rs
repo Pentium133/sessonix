@@ -10,8 +10,11 @@ use tauri::{AppHandle, Emitter};
 
 const RING_BUFFER_SIZE: usize = 1024 * 1024; // 1MB per session
 
-#[allow(dead_code)]
 pub struct PtySession {
+    /// PTY id; retained in the struct so reader threads and diagnostics can
+    /// refer back to the session that owns them even though no external
+    /// caller reads the field directly.
+    #[allow(dead_code)]
     pub id: u32,
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -56,18 +59,6 @@ impl PtySession {
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn try_wait(&self) -> Option<u32> {
-        let mut child = self.child.lock().unwrap();
-        child.try_wait().ok().flatten().map(|s| {
-            if s.success() {
-                0
-            } else {
-                s.exit_code()
-            }
-        })
     }
 
     /// Check if the shell/agent is idle by comparing the PTY's foreground process group
@@ -286,16 +277,6 @@ impl PtyManager {
             .get(&id)
             .cloned()
             .ok_or(AppError::SessionNotFound(id))
-    }
-
-    #[allow(dead_code)]
-    pub fn remove_session(&self, id: u32) -> Option<Arc<PtySession>> {
-        self.sessions.lock().unwrap().remove(&id)
-    }
-
-    #[allow(dead_code)]
-    pub fn session_ids(&self) -> Vec<u32> {
-        self.sessions.lock().unwrap().keys().cloned().collect()
     }
 
     pub fn session_count(&self) -> usize {
