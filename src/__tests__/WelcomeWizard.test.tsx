@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import WelcomeWizard from "../components/WelcomeWizard";
 
 vi.mock("../lib/api", () => ({
-  detectAgents: vi.fn().mockResolvedValue({ claude: true, codex: true, gemini: false }),
+  detectAgents: vi.fn().mockResolvedValue({ claude: true, codex: true, gemini: false, opencode: true }),
   getSetting: vi.fn().mockResolvedValue(null),
   setSetting: vi.fn().mockResolvedValue(undefined),
   installClaudeHooks: vi.fn().mockResolvedValue(true),
@@ -54,6 +54,17 @@ describe("WelcomeWizard", () => {
       expect(screen.getByText("claude")).toBeTruthy();
       expect(screen.getByText("codex")).toBeTruthy();
       expect(screen.getByText("gemini")).toBeTruthy();
+      expect(screen.getByText("opencode")).toBeTruthy();
+    });
+  });
+
+  it("Step 2 marks opencode as found when detected", async () => {
+    render(<WelcomeWizard onComplete={onComplete} />);
+    fireEvent.click(screen.getByText("Get Started"));
+    await waitFor(() => {
+      const opencodeRow = screen.getByText("opencode").closest(".wizard-agent-row");
+      expect(opencodeRow).not.toBeNull();
+      expect(opencodeRow!.querySelector(".wizard-agent-status.found")).not.toBeNull();
     });
   });
 
@@ -132,7 +143,7 @@ describe("WelcomeWizard", () => {
   });
 
   it("Step 2 shows warning when no agents found", async () => {
-    vi.mocked(api.detectAgents).mockResolvedValueOnce({ claude: false, codex: false, gemini: false });
+    vi.mocked(api.detectAgents).mockResolvedValueOnce({ claude: false, codex: false, gemini: false, opencode: false });
     render(<WelcomeWizard onComplete={onComplete} />);
     fireEvent.click(screen.getByText("Get Started"));
     await waitFor(() => {

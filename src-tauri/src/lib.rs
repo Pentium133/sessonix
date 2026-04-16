@@ -701,7 +701,7 @@ fn is_in_path(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Detect which AI agent CLIs are installed (claude, codex, gemini).
+/// Detect which AI agent CLIs are installed (claude, codex, gemini, opencode).
 /// Returns a map of agent name → found in PATH.
 #[tauri::command]
 async fn create_worktree(working_dir: String, branch_name: String) -> Result<git_manager::WorktreeInfo, String> {
@@ -737,7 +737,7 @@ async fn get_git_status(working_dir: String) -> Result<git_manager::GitStatus, S
 
 #[tauri::command]
 fn detect_agents() -> std::collections::HashMap<String, bool> {
-    ["claude", "codex", "gemini"]
+    ["claude", "codex", "gemini", "opencode"]
         .iter()
         .map(|&name| (name.to_string(), is_in_path(name)))
         .collect()
@@ -837,6 +837,20 @@ async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
         }))
     } else {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod detect_agents_tests {
+    use super::detect_agents;
+
+    #[test]
+    fn returned_map_includes_all_known_agents() {
+        let agents = detect_agents();
+        assert!(agents.contains_key("claude"));
+        assert!(agents.contains_key("codex"));
+        assert!(agents.contains_key("gemini"));
+        assert!(agents.contains_key("opencode"));
     }
 }
 
