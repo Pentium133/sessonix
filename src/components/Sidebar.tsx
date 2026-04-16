@@ -129,7 +129,7 @@ export default function Sidebar() {
         command: "zsh",
         args: [],
         working_dir: activeProjectPath,
-        task_name: `${task.name} shell`,
+        task_name: "shell",
         agent_type: "shell",
         task_id: task.id,
       });

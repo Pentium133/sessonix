@@ -119,10 +119,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           });
         }
 
-        // Atomic: populate both stores
+        // Atomic: populate both stores. Honor a persisted activeProjectPath
+        // (from localStorage via projectStore.persist) when it still matches
+        // an existing project — otherwise fall back to the first.
         projectStore.setProjects(projectList);
         if (dbProjects.length > 0) {
-          projectStore.setActiveProjectPath(dbProjects[0].path);
+          const persistedPath = projectStore.activeProjectPath;
+          const stillExists = persistedPath && dbProjects.some((p) => p.path === persistedPath);
+          if (!stillExists) {
+            projectStore.setActiveProjectPath(dbProjects[0].path);
+          }
         }
         set({ sessions: allSessions, loaded: true });
         return;

@@ -18,7 +18,10 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Dogfooding: when Sessonix creates a task worktree inside the aicoder
+      // repo itself, Vite would otherwise see the new files and full-reload,
+      // resetting UI state (active project, active session, etc.).
+      ignored: ["**/src-tauri/**", "**/.sessonix-worktrees/**"],
     },
   },
 });
