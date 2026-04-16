@@ -11,19 +11,17 @@ interface TaskState {
   loaded: boolean;
 
   load: (projectPath: string) => Promise<void>;
-  add: (task: Task) => void;
-  remove: (taskId: number) => void;
   create: (
     projectPath: string,
     name: string,
     branchName: string
   ) => Promise<Task>;
-  destroy: (taskId: number) => Promise<void>;
-
-  tasksForProject: () => Task[];
+  /// Returns a non-null string when the task was removed from DB but the
+  /// worktree cleanup failed (caller should surface as a warning toast).
+  destroy: (taskId: number) => Promise<string | null>;
 }
 
-export const useTaskStore = create<TaskState>((set, get) => ({
+export const useTaskStore = create<TaskState>((set) => ({
   tasks: [],
   loaded: false,
 
@@ -40,11 +38,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  add: (task) => set((s) => ({ tasks: [...s.tasks, task] })),
-
-  remove: (taskId) =>
-    set((s) => ({ tasks: s.tasks.filter((t) => t.id !== taskId) })),
-
   create: async (projectPath, name, branchName) => {
     const task = await apiCreate({
       project_path: projectPath,
@@ -56,9 +49,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   destroy: async (taskId) => {
-    await apiDelete(taskId);
+    const result = await apiDelete(taskId);
     set((s) => ({ tasks: s.tasks.filter((t) => t.id !== taskId) }));
+    return result.worktree_warning;
   },
-
-  tasksForProject: () => get().tasks,
 }));

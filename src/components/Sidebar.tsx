@@ -138,20 +138,21 @@ export default function Sidebar() {
     }
   };
 
-  const deleteTaskWithConfirm = async (task: Task) => {
+  // Confirmation is now inline in TaskGroup header (kill-confirm pattern);
+  // this handler runs only after the user actually confirms.
+  const deleteTaskConfirmed = async (task: Task) => {
     const taskSessions = sessionsByTaskId.get(task.id) ?? [];
-    const runningCount = taskSessions.filter((s) => s.status !== "exited").length;
-    const msg = runningCount > 0
-      ? `Kill ${runningCount} running session${runningCount > 1 ? "s" : ""} and remove "${task.name}" (worktree will be deleted)?`
-      : `Remove task "${task.name}" and its worktree?`;
-    if (!window.confirm(msg)) return;
     try {
-      await destroyTask(task.id);
+      const worktreeWarning = await destroyTask(task.id);
       // Backend deletes sessions via cascade; mirror in sessionStore.
       if (taskSessions.length > 0) {
         useSessionStore.getState().removeSessions(taskSessions.map((s) => s.id));
       }
-      showToast(`Task "${task.name}" removed`, "info");
+      if (worktreeWarning) {
+        showToast(worktreeWarning, "error");
+      } else {
+        showToast(`Task "${task.name}" removed`, "info");
+      }
     } catch (e) {
       showToast(`Failed to remove task: ${e}`, "error");
     }
@@ -344,7 +345,7 @@ export default function Sidebar() {
                 onToggle={() => toggleTaskExpanded(task.id)}
                 onAddAgent={() => openLauncherForTask(task)}
                 onInstantShell={() => launchShellInTask(task)}
-                onDelete={() => deleteTaskWithConfirm(task)}
+                onDelete={() => deleteTaskConfirmed(task)}
                 onSwitchSession={(id) => switchSession(id)}
                 onRelaunchSession={handleRelaunchSession}
                 onRemoveSession={handleRemoveSession}

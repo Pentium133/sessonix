@@ -48,7 +48,6 @@ interface SessionState {
 
   // Derived
   sessionsForProject: (projectPath: string) => Session[];
-  sessionsByTask: (projectPath: string, taskId: number | null) => Session[];
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -380,14 +379,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionsForProject: (projectPath) => {
     return get()
       .sessions.filter((s) => s.working_dir === projectPath)
-      .sort((a, b) => a.sortOrder - b.sortOrder);
-  },
-
-  sessionsByTask: (projectPath, taskId) => {
-    return get()
-      .sessions.filter(
-        (s) => s.working_dir === projectPath && (s.task_id ?? null) === taskId
-      )
       .sort((a, b) => a.sortOrder - b.sortOrder);
   },
 }));

@@ -259,8 +259,14 @@ export async function listTasks(projectPath: string): Promise<Task[]> {
   return infos.map(mapTaskInfo);
 }
 
-export async function deleteTask(taskId: number): Promise<void> {
-  return invoke<void>("delete_task", { taskId });
+export interface DeleteTaskResult {
+  /// Non-fatal warning: DB rows removed, but worktree cleanup failed (e.g.
+  /// dirty index, permission error). Surface to user but don't treat as error.
+  worktree_warning: string | null;
+}
+
+export async function deleteTask(taskId: number): Promise<DeleteTaskResult> {
+  return invoke<DeleteTaskResult>("delete_task", { taskId });
 }
 
 // --- Updates ---

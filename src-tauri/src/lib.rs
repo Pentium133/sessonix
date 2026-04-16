@@ -467,27 +467,43 @@ struct TaskInfo {
 }
 
 /// Parse SQLite `datetime('now')` output (`YYYY-MM-DD HH:MM:SS` in UTC) to Unix ms.
-/// Returns 0 on parse failure. Implemented inline to avoid pulling in chrono.
+/// Returns 0 on parse failure or on fields outside valid calendar ranges.
+/// Implemented inline to avoid pulling in chrono.
 fn parse_iso_to_unix_ms(s: &str) -> i64 {
     if s.len() < 19 {
         return 0;
     }
-    let parse = |start: usize, end: usize| -> i64 {
-        s.get(start..end).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0)
+    let parse = |start: usize, end: usize| -> Option<i64> {
+        s.get(start..end).and_then(|v| v.parse::<i64>().ok())
     };
-    let year = parse(0, 4);
-    let month = parse(5, 7);
-    let day = parse(8, 10);
-    let hour = parse(11, 13);
-    let minute = parse(14, 16);
-    let second = parse(17, 19);
+    let (year, month, day, hour, minute, second) = match (
+        parse(0, 4),
+        parse(5, 7),
+        parse(8, 10),
+        parse(11, 13),
+        parse(14, 16),
+        parse(17, 19),
+    ) {
+        (Some(y), Some(mo), Some(d), Some(h), Some(mi), Some(s)) => (y, mo, d, h, mi, s),
+        _ => return 0,
+    };
+
+    // Calendar bounds. Hinnant's formula assumes valid inputs; out-of-range
+    // values silently produce garbage without these checks.
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
+        return 0;
+    }
 
     // Howard Hinnant's days_from_civil: days since 1970-01-01 (UTC).
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
-    let m = month;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
     (days * 86400 + hour * 3600 + minute * 60 + second) * 1000
@@ -505,11 +521,32 @@ fn task_row_to_info(row: db::TaskRow) -> TaskInfo {
     }
 }
 
+/// Upper bound to prevent pathological inputs from allocating large buffers
+/// downstream (sanitize_branch is char-by-char, git2 will reject at ~255, etc).
+const TASK_FIELD_MAX_LEN: usize = 200;
+
 #[tauri::command]
 fn create_task(
     state: tauri::State<'_, SessionManager>,
     request: CreateTaskRequest,
 ) -> Result<TaskInfo, String> {
+    // Early input validation — reject empty or absurdly long fields before
+    // any filesystem or DB work.
+    let name = request.name.trim();
+    let branch_name = request.branch_name.trim();
+    if name.is_empty() {
+        return Err("Task name is required".into());
+    }
+    if branch_name.is_empty() {
+        return Err("Branch name is required".into());
+    }
+    if name.len() > TASK_FIELD_MAX_LEN {
+        return Err(format!("Task name must be ≤{} characters", TASK_FIELD_MAX_LEN));
+    }
+    if branch_name.len() > TASK_FIELD_MAX_LEN {
+        return Err(format!("Branch name must be ≤{} characters", TASK_FIELD_MAX_LEN));
+    }
+
     // Project must already exist (added via add_project). Lookup id first.
     let project_id = state
         .db
@@ -518,12 +555,12 @@ fn create_task(
         .ok_or_else(|| format!("Unknown project path: {}", request.project_path))?;
 
     // Create the worktree (blocking git2 op). Failure here leaves nothing to clean up.
-    let wt = git_manager::create_worktree(&request.project_path, &request.branch_name)?;
+    let wt = git_manager::create_worktree(&request.project_path, branch_name)?;
 
     // Insert the row. On DB failure, compensate by removing the worktree we just created.
     let task_id = match state.db.insert_task(
         project_id,
-        &request.name,
+        name,
         Some(&wt.branch),
         Some(&wt.path),
         Some(&wt.base_commit),
@@ -535,12 +572,21 @@ fn create_task(
         }
     };
 
-    let row = state
-        .db
-        .get_task_by_id(task_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Task row vanished after insert".to_string())?;
-    Ok(task_row_to_info(row))
+    // Construct TaskInfo directly from known fields + current time — saves a
+    // SELECT round-trip. The DB default matches `SystemTime::now()` to ms precision.
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok(TaskInfo {
+        id: task_id,
+        project_id,
+        name: name.to_string(),
+        branch: Some(wt.branch),
+        worktree_path: Some(wt.path),
+        base_commit: Some(wt.base_commit),
+        created_at,
+    })
 }
 
 #[tauri::command]
@@ -555,8 +601,16 @@ fn list_tasks(
     Ok(rows.into_iter().map(task_row_to_info).collect())
 }
 
+#[derive(serde::Serialize)]
+struct DeleteTaskResult {
+    /// Populated when DB rows were deleted but the worktree on disk wasn't
+    /// fully removed (e.g. dirty index, filesystem permission). The caller
+    /// should surface this as a non-fatal warning — DB state is consistent.
+    worktree_warning: Option<String>,
+}
+
 #[tauri::command]
-fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<(), String> {
+fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<DeleteTaskResult, String> {
     // 1. Look up task to learn its worktree_path.
     let task = state
         .db
@@ -578,14 +632,23 @@ fn delete_task(state: tauri::State<'_, SessionManager>, task_id: i64) -> Result<
         }
     }
 
-    // 3. Remove the worktree (if tracked). Best-effort — if it was already deleted
-    //    manually, remove_worktree returns Ok with a no-op branch inside.
+    // 3. Remove the worktree (if tracked). Best-effort for missing dirs, but
+    //    surface genuine failures so an orphaned worktree on disk is visible
+    //    to the user (otherwise silent disk leak).
+    let mut worktree_warning: Option<String> = None;
     if let Some(ref path) = task.worktree_path {
-        let _ = git_manager::remove_worktree(path);
+        if let Err(e) = git_manager::remove_worktree(path) {
+            log::warn!("delete_task {}: worktree cleanup failed at {}: {}", task_id, path, e);
+            worktree_warning = Some(format!("Worktree at {} was not fully removed: {}", path, e));
+        }
     }
 
-    // 4. Finally delete DB rows (sessions first, then task — inside a transaction).
-    state.db.delete_task(task_id).map_err(|e| e.to_string())
+    // 4. Delete DB rows (sessions first, then task — inside a transaction).
+    //    Done even if worktree cleanup failed: otherwise the task row points
+    //    at a potentially-half-deleted worktree with no way to retry via UI.
+    state.db.delete_task(task_id).map_err(|e| e.to_string())?;
+
+    Ok(DeleteTaskResult { worktree_warning })
 }
 
 #[tauri::command]
@@ -791,6 +854,21 @@ mod iso_parse_tests {
         assert_eq!(parse_iso_to_unix_ms(""), 0);
         assert_eq!(parse_iso_to_unix_ms("not a date"), 0);
         assert_eq!(parse_iso_to_unix_ms("2026-04-16"), 0); // Too short
+    }
+
+    #[test]
+    fn out_of_range_fields_return_zero() {
+        // Month 00 or 13+
+        assert_eq!(parse_iso_to_unix_ms("2026-00-16 12:00:00"), 0);
+        assert_eq!(parse_iso_to_unix_ms("2026-13-16 12:00:00"), 0);
+        // Day 00 or 32+
+        assert_eq!(parse_iso_to_unix_ms("2026-04-00 12:00:00"), 0);
+        assert_eq!(parse_iso_to_unix_ms("2026-04-32 12:00:00"), 0);
+        // Hour/minute/second overflow
+        assert_eq!(parse_iso_to_unix_ms("2026-04-16 24:00:00"), 0);
+        assert_eq!(parse_iso_to_unix_ms("2026-04-16 12:60:00"), 0);
+        // Non-numeric garbage in any field
+        assert_eq!(parse_iso_to_unix_ms("2026-AA-16 12:00:00"), 0);
     }
 }
 
