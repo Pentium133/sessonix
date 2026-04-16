@@ -88,6 +88,68 @@ describe("TaskCreateModal", () => {
     expect(btn.disabled).toBe(true);
   });
 
+  it("auto-fills branch field live as name is typed", () => {
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+    const nameInput = screen.getByPlaceholderText(/Task name/i) as HTMLInputElement;
+    const branchInput = screen.getByPlaceholderText("feat/my-task") as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: "Fix OAuth flow" } });
+    expect(branchInput.value).toBe("feat/fix-oauth-flow");
+
+    fireEvent.change(nameInput, { target: { value: "Add WebSocket support" } });
+    expect(branchInput.value).toBe("feat/add-websocket-support");
+  });
+
+  it("stops auto-filling branch once user edits it manually", () => {
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+    const nameInput = screen.getByPlaceholderText(/Task name/i) as HTMLInputElement;
+    const branchInput = screen.getByPlaceholderText("feat/my-task") as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: "Fix bug" } });
+    expect(branchInput.value).toBe("feat/fix-bug");
+
+    // User customizes branch
+    fireEvent.change(branchInput, { target: { value: "bugfix/custom-name" } });
+    // Typing in name field shouldn't override anymore
+    fireEvent.change(nameInput, { target: { value: "Fix another thing" } });
+    expect(branchInput.value).toBe("bugfix/custom-name");
+  });
+
+  it("transliterates non-Latin task names when auto-filling branch", () => {
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+    const nameInput = screen.getByPlaceholderText(/Task name/i) as HTMLInputElement;
+    const branchInput = screen.getByPlaceholderText("feat/my-task") as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: "Исправить нотификации" } });
+    expect(branchInput.value).toBe("feat/ispravit-notifikatsii");
+
+    fireEvent.change(nameInput, { target: { value: "Café résumé" } });
+    expect(branchInput.value).toBe("feat/cafe-resume");
+  });
+
+  it("falls back to feat/task when name has no representable chars", () => {
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+    const nameInput = screen.getByPlaceholderText(/Task name/i) as HTMLInputElement;
+    const branchInput = screen.getByPlaceholderText("feat/my-task") as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: "🚀🎉" } });
+    expect(branchInput.value).toBe("feat/task");
+  });
+
+  it("resumes auto-fill after user clears the branch field", () => {
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+    const nameInput = screen.getByPlaceholderText(/Task name/i) as HTMLInputElement;
+    const branchInput = screen.getByPlaceholderText("feat/my-task") as HTMLInputElement;
+
+    fireEvent.change(nameInput, { target: { value: "First" } });
+    fireEvent.change(branchInput, { target: { value: "custom" } });
+    // Clear branch
+    fireEvent.change(branchInput, { target: { value: "" } });
+    // Auto-fill resumes
+    fireEvent.change(nameInput, { target: { value: "Second task" } });
+    expect(branchInput.value).toBe("feat/second-task");
+  });
+
   it("shows error toast and keeps modal open on createTask rejection", async () => {
     createTaskMock.mockRejectedValueOnce(new Error("git failed"));
     const onClose = vi.fn();

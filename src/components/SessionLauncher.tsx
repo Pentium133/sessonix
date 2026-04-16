@@ -4,6 +4,7 @@ import type { AgentType } from "../lib/types";
 import { useSettingsStore } from "../store/settingsStore";
 import { useTaskStore } from "../store/taskStore";
 import { getGitStatus, createWorktree } from "../lib/git";
+import { slugify } from "../lib/slugify";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
@@ -219,7 +220,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
     let baseCommit: string | undefined;
 
     if (useWorktree && isGitRepo) {
-      const branch = worktreeBranch.trim() || `sessonix/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+      const branch = worktreeBranch.trim() || `sessonix/${slugify(name) || "session"}`;
       setWorktreeCreating(true);
       try {
         const info = await createWorktree(props.projectPath, branch);
@@ -439,7 +440,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
               <>
                 <input
                   className="launcher-input"
-                  placeholder={`Branch name (default: sessonix/${(taskName.trim() || "session").toLowerCase().replace(/[^a-z0-9]+/g, "-")})`}
+                  placeholder={`Branch name (default: sessonix/${slugify(taskName) || "session"})`}
                   value={worktreeBranch}
                   onChange={(e) => setWorktreeBranch(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}

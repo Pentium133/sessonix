@@ -214,12 +214,18 @@ export default function Sidebar() {
             </svg>
           </button>
           <button
-            className="new-btn new-task-btn"
+            className="new-task-btn"
             onClick={onNewTask}
             disabled={!projectGit?.is_repo}
             title={projectGit?.is_repo ? "New task (creates worktree)" : "Project must be a git repository"}
           >
-            <WorktreeIcon className="session-wt-icon" />
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="4" cy="3.5" r="1.5" />
+              <circle cx="12" cy="3.5" r="1.5" />
+              <circle cx="4" cy="12.5" r="1.5" />
+              <path d="M4 5v6" />
+              <path d="M12 5c0 3-4 3.5-4 6.5" />
+            </svg>
           </button>
           {confirmRemoveProject ? (
             <>

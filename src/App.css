@@ -1296,12 +1296,29 @@ body {
 }
 
 .new-task-btn {
+  background: transparent;
   color: var(--accent);
+  border: 1px solid var(--accent);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  transition: background 0.12s, color 0.12s;
+}
+
+.new-task-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 .new-task-btn:disabled {
   color: var(--text-dim);
-  opacity: 0.5;
+  border-color: var(--border);
+  opacity: 0.6;
   cursor: not-allowed;
 }
 

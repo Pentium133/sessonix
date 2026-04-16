@@ -103,6 +103,7 @@ export function useSessionActions() {
         worktree_path: worktreePath,
         base_commit: baseCommit,
         prompt: session.initial_prompt ?? undefined,
+        task_id: session.task_id ?? undefined,
       });
     } catch (err) {
       showToast(String(err), "error");
@@ -132,6 +133,9 @@ export function useSessionActions() {
         working_dir: session.working_dir,
         task_name: `${session.task_name} (fork)`,
         agent_type: session.agent_type,
+        worktree_path: session.worktree_path ?? undefined,
+        base_commit: session.base_commit ?? undefined,
+        task_id: session.task_id ?? undefined,
       });
       showToast("Session forked", "success");
     } catch (err) {

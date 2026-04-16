@@ -1,31 +1,49 @@
 import { useState } from "react";
 import { useTaskStore } from "../store/taskStore";
 import { showToast } from "./Toast";
+import { slugify } from "../lib/slugify";
 
 interface TaskCreateModalProps {
   projectPath: string;
   onClose: () => void;
 }
 
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+function branchFromName(name: string): string {
+  const slug = slugify(name);
+  // If transliteration wiped everything out (e.g. pure CJK/emoji input),
+  // fall back to a stable prefix. git_manager will dedup with -2/-3 suffixes.
+  return `feat/${slug || "task"}`;
 }
 
 export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModalProps) {
   const [name, setName] = useState("");
   const [branchName, setBranchName] = useState("");
+  const [branchDirty, setBranchDirty] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const trimmedName = name.trim();
-  const placeholderBranch = trimmedName ? `feat/${slugify(trimmedName)}` : "feat/my-task";
+  const autoBranch = trimmedName ? branchFromName(trimmedName) : "";
   const canCreate = trimmedName.length > 0 && !creating;
+
+  function handleNameChange(v: string) {
+    setName(v);
+    // While the branch field hasn't been manually touched, keep it in sync
+    // with a slugified (and transliterated) version of the task name.
+    if (!branchDirty) {
+      const trimmed = v.trim();
+      setBranchName(trimmed ? branchFromName(trimmed) : "");
+    }
+  }
+
+  function handleBranchChange(v: string) {
+    setBranchName(v);
+    // If the user clears the field, resume auto-fill from the name.
+    setBranchDirty(v.trim().length > 0);
+  }
 
   async function handleCreate() {
     if (!canCreate) return;
-    const branch = branchName.trim() || `feat/${slugify(trimmedName)}`;
+    const branch = branchName.trim() || autoBranch;
     setCreating(true);
     try {
       await useTaskStore.getState().create(projectPath, trimmedName, branch);
@@ -58,15 +76,15 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
           className="launcher-input"
           placeholder="Task name (e.g. fix auth flow)"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => handleNameChange(e.target.value)}
           onKeyDown={handleKeyDown}
           autoFocus
         />
         <input
           className="launcher-input"
-          placeholder={`Branch name (default: ${placeholderBranch})`}
+          placeholder="feat/my-task"
           value={branchName}
-          onChange={(e) => setBranchName(e.target.value)}
+          onChange={(e) => handleBranchChange(e.target.value)}
           onKeyDown={handleKeyDown}
           style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
         />
