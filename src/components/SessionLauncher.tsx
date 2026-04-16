@@ -22,21 +22,26 @@ const AGENTS: { type: AgentType; label: string; command: string; color: string }
   { type: "custom",   label: "+",        command: "",         color: "var(--accent)"   },
 ];
 
-function buildArgs(
-  agentType: AgentType,
-  claudeMode: ClaudeSessionMode,
-  codexMode: CodexSessionMode,
-  opencodeMode: OpenCodeSessionMode,
-  skipPerms: boolean,
-  resumeSessionId: string,
-  prompt: string
-): string[] {
+interface BuildArgsOptions {
+  agentType: AgentType;
+  claudeMode: ClaudeSessionMode;
+  codexMode: CodexSessionMode;
+  opencodeMode: OpenCodeSessionMode;
+  skipPerms: boolean;
+  resumeSessionId: string;
+  prompt: string;
+}
+
+function buildArgs(opts: BuildArgsOptions): string[] {
+  const { agentType, claudeMode, codexMode, opencodeMode, skipPerms, resumeSessionId, prompt } = opts;
+  const trimmedId = resumeSessionId.trim();
+
   if (agentType === "claude") {
     const args: string[] = [];
     if (skipPerms) args.push("--dangerously-skip-permissions");
     if (claudeMode === "continue") args.push("--continue");
-    if (claudeMode === "resume" && resumeSessionId.trim()) {
-      args.push("--resume", resumeSessionId.trim());
+    if (claudeMode === "resume" && trimmedId) {
+      args.push("--resume", trimmedId);
     }
     // Positional arg = interactive session with initial prompt (not -p which exits after response)
     if (prompt && claudeMode === "new") {
@@ -47,8 +52,8 @@ function buildArgs(
   }
   if (agentType === "codex") {
     const args: string[] = [];
-    if (codexMode === "resume" && resumeSessionId.trim()) {
-      args.push("resume", resumeSessionId.trim());
+    if (codexMode === "resume" && trimmedId) {
+      args.push("resume", trimmedId);
     } else if (codexMode === "last") {
       args.push("resume", "--last");
     }
@@ -61,8 +66,8 @@ function buildArgs(
   }
   if (agentType === "opencode") {
     const args: string[] = ["run", "--quiet"];
-    if (opencodeMode === "resume" && resumeSessionId.trim()) {
-      args.push("--session", resumeSessionId.trim());
+    if (opencodeMode === "resume" && trimmedId) {
+      args.push("--session", trimmedId);
     } else if (opencodeMode === "last") {
       args.push("--continue");
     }
@@ -227,7 +232,15 @@ export default function SessionLauncher(props: SessionLauncherProps) {
 
     const name = taskName.trim() || `${selectedAgent.label} session`;
     const trimmedPrompt = prompt.trim();
-    const args = buildArgs(selectedAgent.type, claudeSessionMode, codexSessionMode, opencodeSessionMode, skipPermissions, resumeSessionId, trimmedPrompt);
+    const args = buildArgs({
+      agentType: selectedAgent.type,
+      claudeMode: claudeSessionMode,
+      codexMode: codexSessionMode,
+      opencodeMode: opencodeSessionMode,
+      skipPerms: skipPermissions,
+      resumeSessionId,
+      prompt: trimmedPrompt,
+    });
 
     // Append custom extra arguments (split by spaces, respecting quotes)
     if (extraArgs.trim()) {
