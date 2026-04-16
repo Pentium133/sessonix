@@ -114,6 +114,8 @@ export default function SessionItem({
               <WorktreeIcon className="session-wt-icon" size={10} />
               {session.gitStatus!.branch}
             </span>
+          ) : isAlive && session.initial_prompt ? (
+            <span className="card-status-line card-status-dim" title={session.initial_prompt}>{session.initial_prompt}</span>
           ) : (
             <span className="card-status-line card-status-dim">
               {isAlive ? session.agent_type : "Exited"}
