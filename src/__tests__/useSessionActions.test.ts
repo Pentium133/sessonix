@@ -212,6 +212,86 @@ describe("useSessionActions", () => {
       const call = vi.mocked(api.createSession).mock.calls[0][0];
       expect(call.args).toEqual(["--model", "gemini-pro"]);
     });
+
+    it("uses run --quiet --session <id> for OpenCode with agentSessionId", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: ["run", "--quiet"],
+        agentSessionId: "ses_abc123",
+        status: "exited",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+      vi.mocked(api.createSession).mockResolvedValue(56);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_abc123"]);
+    });
+
+    it("uses run --quiet --continue for OpenCode without agentSessionId", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: ["run", "--quiet"],
+        agentSessionId: undefined,
+        status: "exited",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+      vi.mocked(api.createSession).mockResolvedValue(57);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["run", "--quiet", "--continue"]);
+    });
+
+    it("drops prompt on OpenCode relaunch (context already on backend)", async () => {
+      const session = makeSession({
+        id: 1,
+        agent_type: "opencode",
+        command: "opencode",
+        args: ["run", "--quiet", "fix the bug"],
+        agentSessionId: "ses_xyz",
+        initial_prompt: "fix the bug",
+        status: "exited",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 1 });
+      useProjectStore.setState({
+        projects: [{ path: "/tmp/app", name: "app", sessions: [1] }],
+        activeProjectPath: "/tmp/app",
+      });
+      vi.mocked(api.createSession).mockResolvedValue(58);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["run", "--quiet", "--session", "ses_xyz"]);
+      expect(call.args).not.toContain("fix the bug");
+    });
   });
 
   describe("handleForkSession", () => {

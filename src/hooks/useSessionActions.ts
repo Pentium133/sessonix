@@ -28,6 +28,12 @@ function buildResumeArgs(session: Session): string[] {
   if (session.agent_type === "codex") {
     return ["resume", "--last"];
   }
+  if (session.agent_type === "opencode" && session.agentSessionId) {
+    return ["run", "--quiet", "--session", session.agentSessionId];
+  }
+  if (session.agent_type === "opencode") {
+    return ["run", "--quiet", "--continue"];
+  }
   // Gemini: prompt as positional arg (same as initial launch)
   if (session.agent_type === "gemini" && prompt) {
     return [prompt];
