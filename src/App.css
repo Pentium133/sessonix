@@ -1062,7 +1062,16 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-templates-empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: calc(var(--space) * 2) 0;
+}
+
 .sidebar-templates-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1077,31 +1086,16 @@ body {
   align-items: center;
   border-radius: var(--radius);
   margin-bottom: 2px;
-  padding: calc(var(--space) * 1.5) 0;
+  padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
 }
 
 .template-item:hover {
   background: var(--hover);
 }
 
-.template-badge {
-  width: 3px;
-  align-self: stretch;
-  background: var(--agent-color, var(--text-dim));
-  border-radius: var(--radius) 0 0 var(--radius);
-  flex-shrink: 0;
-}
-
 .template-body {
   flex: 1;
   min-width: 0;
-  padding: 0 calc(var(--space) * 2);
-}
-
-.template-row-top {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--space) * 1.5);
 }
 
 .template-name {
@@ -1164,6 +1158,15 @@ body {
 .template-btn-delete:hover {
   color: var(--error);
   border-color: var(--error);
+}
+
+.template-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: calc(var(--space) * 5);
+  width: 360px;
+  max-width: 90vw;
 }
 
 .launcher-project-badge {

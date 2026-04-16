@@ -1,7 +1,4 @@
-import AgentIcon from "./AgentIcon";
-import { AGENT_COLORS } from "../lib/constants";
 import type { TemplateInfo } from "../lib/api";
-import type { AgentType } from "../lib/types";
 
 interface TemplateItemProps {
   template: TemplateInfo;
@@ -11,19 +8,10 @@ interface TemplateItemProps {
 }
 
 export default function TemplateItem({ template, onRun, onEdit, onDelete }: TemplateItemProps) {
-  const agentColor = AGENT_COLORS[template.agent] ?? AGENT_COLORS.custom;
-
   return (
-    <div
-      className="template-item"
-      style={{ "--agent-color": agentColor } as React.CSSProperties}
-    >
-      <div className="template-badge" />
+    <div className="template-item">
       <div className="template-body">
-        <div className="template-row-top">
-          <AgentIcon agentType={template.agent as AgentType} size={12} />
-          <span className="template-name">{template.name}</span>
-        </div>
+        <div className="template-name">{template.name}</div>
         {template.initial_prompt && (
           <div className="template-prompt" title={template.initial_prompt}>
             {template.initial_prompt}

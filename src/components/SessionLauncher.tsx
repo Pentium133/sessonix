@@ -6,7 +6,6 @@ import { getGitStatus, createWorktree } from "../lib/git";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
-import { useTemplateStore } from "../store/templateStore";
 import type { LauncherPrefill } from "../store/uiStore";
 type ClaudeSessionMode = "new" | "continue" | "resume";
 type CodexSessionMode = "new" | "resume" | "last";
@@ -120,7 +119,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   useEffect(() => {
     if (isOpen) {
       const defaultType = useSettingsStore.getState().defaultAgent;
-      const agentType = prefill?.agent ?? defaultType;
+      const agentType = prefill?.agent || defaultType;
       setSelectedAgent(AGENTS.find((a) => a.type === agentType) ?? AGENTS[1]);
       setTaskName(prefill?.taskName ?? "");
       setCustomCommand("");
@@ -442,25 +441,6 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           <button className="launcher-back" onClick={onClose}>
             Cancel
           </button>
-          {prompt.trim() && (
-            <button
-              className="launcher-save-template"
-              onClick={() => {
-                const name = taskName.trim() || `${selectedAgent.label} template`;
-                useTemplateStore.getState().add({
-                  name,
-                  project_path: props.projectPath,
-                  agent: selectedAgent.type,
-                  initial_prompt: prompt.trim() || undefined,
-                  skip_permissions: skipPermissions,
-                }).then(() => {
-                  showToast(`Template "${name}" saved`, "success");
-                }).catch((err) => showToast(String(err), "error"));
-              }}
-            >
-              Save Template
-            </button>
-          )}
           <button
             className="launcher-launch"
             onClick={handleLaunch}
