@@ -203,34 +203,17 @@ impl SessionManager {
             });
         }
 
-        // Write prompt to stdin for agents that accept it interactively.
-        // Claude: wait until TUI is ready (idle detection via last_lines).
-        // Shell/custom: fixed delay (shell init varies widely).
-        // Codex/Gemini: prompt passed as CLI positional arg, not stdin.
-        let needs_stdin_prompt = matches!(params.agent_type, "claude" | "shell" | "custom");
+        // Shell/custom: write prompt to stdin after delay so the shell has time to init.
+        // Claude/Codex/Gemini: prompt passed as CLI positional arg, not stdin.
+        let needs_stdin_prompt = matches!(params.agent_type, "shell" | "custom");
         if needs_stdin_prompt {
             if let Some(prompt) = params.prompt {
                 let prompt = format!("{}\n", prompt);
-                let is_claude = params.agent_type == "claude";
                 if let Ok(session) = self.pty.get_session(pty_id) {
                     std::thread::spawn(move || {
-                        if is_claude {
-                            // Poll last_lines until Claude shows its input prompt
-                            for _ in 0..60 {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                let lines = session.last_lines.lock().unwrap();
-                                let ready = lines.iter().rev().any(|line| {
-                                    let s = line.trim();
-                                    !s.is_empty() && (s.ends_with('>') || s.ends_with('$') || s.contains("What can I help"))
-                                });
-                                if ready { break; }
-                            }
-                        } else {
-                            // Shell/custom: fixed delay for init
-                            std::thread::sleep(std::time::Duration::from_millis(2000));
-                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2000));
                         if let Err(e) = session.write_input(prompt.as_bytes()) {
-                            log::warn!("Failed to write prompt to stdin: {}", e);
+                            log::warn!("Failed to write prompt to shell stdin: {}", e);
                         }
                     });
                 }

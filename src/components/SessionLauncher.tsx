@@ -33,7 +33,10 @@ function buildArgs(
     if (claudeMode === "resume" && resumeSessionId.trim()) {
       args.push("--resume", resumeSessionId.trim());
     }
-    // Prompt delivered via backend stdin write (not -p which is non-interactive one-shot)
+    // Positional arg = interactive session with initial prompt (not -p which exits after response)
+    if (prompt && claudeMode === "new") {
+      args.push(prompt);
+    }
     // "new" → session_manager.rs generates --session-id <uuid>
     return args;
   }
