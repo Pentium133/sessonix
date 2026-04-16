@@ -34,18 +34,18 @@ body {
   background: var(--bg);
   color: var(--text);
   overflow: hidden;
-  height: 100vh;
+  height: 100%;
   -webkit-font-smoothing: antialiased;
 }
 
 #root {
-  height: 100vh;
+  height: 100%;
 }
 
 .app-layout {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
 }
 
 
@@ -809,9 +809,10 @@ body {
   padding: 0 calc(var(--space) * 2);
 }
 
-/* Terminal pane */
+/* Terminal pane — counter-zoom to keep terminal at native scale */
 .terminal-pane {
   background: var(--bg);
+  zoom: var(--ui-zoom-inverse, 1);
 }
 
 .terminal-pane .xterm {

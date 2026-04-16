@@ -169,6 +169,22 @@ function App() {
         }
         return;
       }
+      // Zoom: Cmd+= / Cmd+- / Cmd+0
+      if ((e.metaKey || e.ctrlKey) && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        ui.zoomIn();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "-") {
+        e.preventDefault();
+        ui.zoomOut();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "0") {
+        e.preventDefault();
+        ui.resetZoom();
+        return;
+      }
       // Ctrl+1-9: switch projects
       if (e.ctrlKey && !e.metaKey && !e.shiftKey && e.key >= "1" && e.key <= "9") {
         const idx = parseInt(e.key) - 1;

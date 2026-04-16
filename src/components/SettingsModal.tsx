@@ -18,6 +18,8 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
   const closeSettings = useUiStore((s) => s.closeSettings);
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
+  const uiZoom = useUiStore((s) => s.uiZoom);
+  const setUiZoom = useUiStore((s) => s.setUiZoom);
   const fontSize = useSettingsStore((s) => s.terminalFontSize);
   const fontFamily = useSettingsStore((s) => s.terminalFontFamily);
   const defaultAgent = useSettingsStore((s) => s.defaultAgent);
@@ -116,6 +118,21 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-label">UI zoom</label>
+                  <div className="settings-control">
+                    <input
+                      type="range"
+                      min={75}
+                      max={150}
+                      step={5}
+                      value={Math.round(uiZoom * 100)}
+                      onChange={(e) => setUiZoom(parseInt(e.target.value, 10) / 100)}
+                      className="settings-slider"
+                    />
+                    <span className="settings-value">{Math.round(uiZoom * 100)}%</span>
+                  </div>
                 </div>
               </div>
 
