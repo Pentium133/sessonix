@@ -197,11 +197,11 @@ fn get_pricing(model: &str) -> ModelPricing {
 }
 
 /// Cached cost results keyed by path → (file_size, result).
-use std::sync::Mutex as StdMutex;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 
-static COST_CACHE: std::sync::LazyLock<StdMutex<HashMap<PathBuf, (u64, SessionCost)>>> =
-    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
+static COST_CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, (u64, SessionCost)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Parse JSONL file and compute total cost.
 /// Caches result by file size — returns cached value if file hasn't grown.
@@ -209,7 +209,7 @@ pub fn compute_cost(path: &PathBuf) -> SessionCost {
     // Check cache: if file size unchanged, return cached result
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     {
-        let cache = COST_CACHE.lock().unwrap();
+        let cache = COST_CACHE.lock();
         if let Some((cached_size, ref cached_cost)) = cache.get(path) {
             if *cached_size == file_size {
                 return cached_cost.clone();
@@ -269,7 +269,7 @@ pub fn compute_cost(path: &PathBuf) -> SessionCost {
 
     // Cache the result (bounded to 32 entries; evict smallest file_size when full)
     {
-        let mut cache = COST_CACHE.lock().unwrap();
+        let mut cache = COST_CACHE.lock();
         if cache.len() >= 32 {
             if let Some(oldest_key) = cache
                 .iter()

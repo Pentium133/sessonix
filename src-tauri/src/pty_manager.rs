@@ -3,8 +3,9 @@ use crate::ring_buffer::RingBuffer;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter};
 
@@ -29,7 +30,7 @@ pub struct PtySession {
 
 impl PtySession {
     pub fn write_input(&self, data: &[u8]) -> Result<(), AppError> {
-        let mut writer = self.writer.lock().unwrap();
+        let mut writer = self.writer.lock();
         writer
             .write_all(data)
             .map_err(|e| AppError::Pty(format!("write failed: {}", e)))?;
@@ -42,7 +43,6 @@ impl PtySession {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), AppError> {
         self.master
             .lock()
-            .unwrap()
             .resize(PtySize {
                 rows,
                 cols,
@@ -54,7 +54,7 @@ impl PtySession {
     }
 
     pub fn kill(&self) -> Result<(), AppError> {
-        let mut child = self.child.lock().unwrap();
+        let mut child = self.child.lock();
         child
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
@@ -67,7 +67,7 @@ impl PtySession {
     #[cfg(unix)]
     pub fn is_foreground_idle(&self) -> Option<bool> {
         let shell_pid = self.shell_pid?;
-        let fg_pgid = self.master.lock().unwrap().process_group_leader()?;
+        let fg_pgid = self.master.lock().process_group_leader()?;
         // `pid_t` is i32; guard against unexpected negative values before widening to u32.
         if fg_pgid <= 0 {
             return None;
@@ -206,7 +206,7 @@ impl PtyManager {
                         let data = &buf[..n];
 
                         // Always write to ring buffer
-                        rb.lock().unwrap().write(data);
+                        rb.lock().write(data);
 
                         // Update last_lines for status extraction
                         let text = String::from_utf8_lossy(data);
@@ -222,7 +222,7 @@ impl PtyManager {
                         // Split on both \n and \r so carriage-return-only redraws
                         // are processed rather than accumulated.
                         if partial_line.contains('\n') || partial_line.contains('\r') {
-                            let mut lines = ll.lock().unwrap();
+                            let mut lines = ll.lock();
                             for line in partial_line.split(['\n', '\r']) {
                                 if !line.is_empty() {
                                     lines.push_back(line.to_string());
@@ -266,31 +266,30 @@ impl PtyManager {
             shell_pid,
         });
 
-        self.sessions.lock().unwrap().insert(id, session);
+        self.sessions.lock().insert(id, session);
         Ok(id)
     }
 
     pub fn get_session(&self, id: u32) -> Result<Arc<PtySession>, AppError> {
         self.sessions
             .lock()
-            .unwrap()
             .get(&id)
             .cloned()
             .ok_or(AppError::SessionNotFound(id))
     }
 
     pub fn session_count(&self) -> usize {
-        self.sessions.lock().unwrap().len()
+        self.sessions.lock().len()
     }
 
     pub fn running_count(&self) -> u32 {
-        self.sessions.lock().unwrap().len() as u32
+        self.sessions.lock().len() as u32
     }
 }
 
 impl Drop for PtyManager {
     fn drop(&mut self) {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock();
         for (_, session) in sessions.iter() {
             let _ = session.kill();
         }

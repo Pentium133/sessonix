@@ -11,8 +11,9 @@ mod types;
 
 use adapters::AdapterRegistry;
 use session_manager::{CreateSessionParams, SessionManager};
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
@@ -76,7 +77,7 @@ fn detach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<()
         .store(false, std::sync::atomic::Ordering::Relaxed);
     // Drain and discard: data was already sent via events while attached.
     // This ensures reattach only returns data accumulated during detach.
-    session.ring_buffer.lock().unwrap().drain();
+    session.ring_buffer.lock().drain();
     Ok(())
 }
 
@@ -88,7 +89,7 @@ fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<Ve
         .load(std::sync::atomic::Ordering::Relaxed);
     // Only drain if session was detached — otherwise data was already sent via events
     let buffered = if was_detached {
-        session.ring_buffer.lock().unwrap().drain()
+        session.ring_buffer.lock().drain()
     } else {
         Vec::new()
     };
@@ -144,7 +145,7 @@ fn get_session_status(
                     jsonl::ClaudeStatus::Error(msg) => (types::SessionStatus::Error, msg),
                     jsonl::ClaudeStatus::Unknown => {
                         // Fall back to terminal-based detection
-                        let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+                        let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
                         if let Some(adapter) = adapters.get("claude") {
                             let s = adapter.extract_status(&lines);
                             (s.state, s.status_line)
@@ -163,7 +164,7 @@ fn get_session_status(
     // unavailable — theoretically unreachable on Unix (process_id always returns Some).
     let is_shell = matches!(agent_type.as_deref(), Some("shell" | "custom"));
     if is_shell {
-        let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+        let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
 
         return match session.is_foreground_idle() {
             Some(true) => Ok(types::AgentStatus {
@@ -194,7 +195,7 @@ fn get_session_status(
     }
 
     // Fallback: terminal-based status extraction for other agent types
-    let lines: Vec<String> = session.last_lines.lock().unwrap().iter().cloned().collect();
+    let lines: Vec<String> = session.last_lines.lock().iter().cloned().collect();
     if let Some(ref at) = agent_type {
         if let Some(adapter) = adapters.get(at) {
             return Ok(adapter.extract_status(&lines));
@@ -792,15 +793,14 @@ async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
     // Rate limit: skip if checked less than 10 minutes ago (unless forced).
     // Single lock scope for atomic read+stamp to prevent concurrent duplicate calls.
     if !force {
-        if let Ok(mut guard) = LAST_UPDATE_CHECK.lock() {
-            if let Some(last) = *guard {
-                if last.elapsed().as_secs() < 600 {
-                    return Ok(None);
-                }
+        let mut guard = LAST_UPDATE_CHECK.lock();
+        if let Some(last) = *guard {
+            if last.elapsed().as_secs() < 600 {
+                return Ok(None);
             }
-            // Stamp now to prevent concurrent calls while network request is in-flight
-            *guard = Some(Instant::now());
         }
+        // Stamp now to prevent concurrent calls while network request is in-flight
+        *guard = Some(Instant::now());
     }
 
     let current_version = env!("CARGO_PKG_VERSION");
@@ -839,9 +839,7 @@ async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
     let (version, html_url) = match result {
         Ok(v) => v,
         Err(e) => {
-            if let Ok(mut guard) = LAST_UPDATE_CHECK.lock() {
-                *guard = None;
-            }
+            *LAST_UPDATE_CHECK.lock() = None;
             return Err(e);
         }
     };

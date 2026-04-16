@@ -3969,6 +3969,7 @@ dependencies = [
  "fix-path-env",
  "git2",
  "log",
+ "parking_lot",
  "portable-pty",
  "regex",
  "rusqlite",
