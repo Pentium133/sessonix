@@ -47,7 +47,11 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
   const [creating, setCreating] = useState(false);
 
   const [branches, setBranches] = useState<BranchListItem[]>([]);
-  const [branchesLoading, setBranchesLoading] = useState(true);
+  // Initial render shows an enabled select with just the "(create new)"
+  // sentinel — the useEffect below flips this to `true` before the request
+  // and back to `false` on resolution. Keeping the initial value `false`
+  // avoids a momentary disabled select on mount.
+  const [branchesLoading, setBranchesLoading] = useState(false);
   const [selectedSource, setSelectedSource] = useState<string>(CREATE_NEW);
 
   useEffect(() => {
@@ -143,10 +147,11 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
     }
   }
 
-  // Entries in display order: main first (disabled), then new-worktree-able,
-  // then attachable, then already-taken. Keeps likely picks at the top.
+  // Display order, likely picks first: new → attach → task-taken → main.
+  // `main` sorts last (and is also rendered disabled) since it can never be
+  // selected for a worktree.
   const sortedBranches = useMemo(() => {
-    const order = { main: 3, task: 2, attach: 1, new: 0 } as const;
+    const order = { new: 0, attach: 1, task: 2, main: 3 } as const;
     return [...branches].sort((a, b) => {
       const delta = order[branchState(a)] - order[branchState(b)];
       return delta !== 0 ? delta : a.name.localeCompare(b.name);

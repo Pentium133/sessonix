@@ -88,25 +88,28 @@ pub struct BranchInfo {
 pub fn list_branches(working_dir: &str) -> Result<Vec<BranchInfo>, String> {
     let repo = Repository::discover(working_dir).map_err(|e| format!("Not a git repo: {}", e))?;
 
-    // Resolve the main workdir — works whether `working_dir` is the main
-    // checkout or any linked worktree. For a linked worktree, `repo.path()`
-    // returns `.git/worktrees/<name>/`; walking up three levels lands in the
-    // main repo root.
-    let main_workdir = if repo.is_worktree() {
-        repo.path()
+    // When `working_dir` is itself a linked worktree we have to re-open the
+    // main repo to read its HEAD and enumerate branches from the shared ref
+    // store. When it is already the main workdir — the common case — reuse
+    // the handle we just opened instead of paying for a second discover.
+    let (main_repo, main_workdir) = if repo.is_worktree() {
+        let main_workdir = repo
+            .path()
             .parent()
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .ok_or("Cannot resolve main workdir from linked worktree")?
-            .to_path_buf()
+            .to_path_buf();
+        let main_repo = Repository::open(&main_workdir)
+            .map_err(|e| format!("Failed to open main repo at {:?}: {}", main_workdir, e))?;
+        (main_repo, main_workdir)
     } else {
-        repo.workdir()
+        let main_workdir = repo
+            .workdir()
             .ok_or("Bare repository not supported")?
-            .to_path_buf()
+            .to_path_buf();
+        (repo, main_workdir)
     };
-
-    let main_repo = Repository::open(&main_workdir)
-        .map_err(|e| format!("Failed to open main repo at {:?}: {}", main_workdir, e))?;
 
     // Which branch (if any) is checked out in the main workdir right now.
     let main_branch: Option<String> = main_repo.head().ok().and_then(|h| {
