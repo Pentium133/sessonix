@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import { useTemplateStore } from "../store/templateStore";
@@ -6,6 +6,7 @@ import { useTaskStore } from "../store/taskStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { useGitStatus } from "../hooks/useGitStatus";
+import { useSessionDragAndDrop } from "../hooks/useSessionDragAndDrop";
 import { writeToSession } from "../lib/api";
 import { focusTerminal } from "../lib/terminalPool";
 import { showToast } from "./Toast";
@@ -24,19 +25,13 @@ export default function Sidebar() {
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const switchSession = useSessionStore((s) => s.switchSession);
-  const reorderSessionOrder = useSessionStore((s) => s.reorderSessionOrder);
   const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed);
   const width = useUiStore((s) => s.sidebarWidth);
   const toggleCollapse = useUiStore((s) => s.toggleCollapse);
 
   const [confirmRemoveProject, setConfirmRemoveProject] = useState(false);
 
-  // Drag state for reordering sessions
-  const [draggingId, setDraggingId] = useState<number | null>(null);
-  const [dragOverId, setDragOverId] = useState<number | null>(null);
-  const draggingIdRef = useRef<number | null>(null);
-  const dragOverRef = useRef<{ id: number; sortOrder: number } | null>(null);
-  const dropAcceptedRef = useRef(false);
+  const { draggingId, dragOverId, draggingIdRef, handlersFor: dragHandlersFor } = useSessionDragAndDrop();
 
   const { handleRemoveSession, handleRelaunchSession, handleForkSession } = useSessionActions();
 
@@ -288,42 +283,7 @@ export default function Sidebar() {
                 onRelaunch={handleRelaunchSession}
                 onRemove={handleRemoveSession}
                 onFork={handleForkSession}
-                onDragStart={(e) => {
-                  setDraggingId(session.id);
-                  draggingIdRef.current = session.id;
-                  e.dataTransfer.effectAllowed = "move";
-                  e.dataTransfer.setData("text/plain", String(session.id));
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (session.id !== draggingIdRef.current) {
-                    setDragOverId(session.id);
-                    dragOverRef.current = { id: session.id, sortOrder: session.sortOrder };
-                  }
-                }}
-                onDragLeave={(e) => {
-                  const related = e.relatedTarget as Node | null;
-                  if (!e.currentTarget.contains(related)) {
-                    setDragOverId(null);
-                  }
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  dropAcceptedRef.current = true;
-                }}
-                onDragEnd={() => {
-                  const dragId = draggingIdRef.current;
-                  const over = dragOverRef.current;
-                  if (dropAcceptedRef.current && dragId !== null && over && dragId !== over.id) {
-                    reorderSessionOrder(dragId, over.sortOrder);
-                  }
-                  setDraggingId(null);
-                  draggingIdRef.current = null;
-                  setDragOverId(null);
-                  dragOverRef.current = null;
-                  dropAcceptedRef.current = false;
-                }}
+                {...dragHandlersFor(session)}
               />
             ))}
 
