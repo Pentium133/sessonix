@@ -199,53 +199,61 @@ export const useUiStore = create<UiState>()(
   )
 );
 
-// Restore UI settings from SQLite (authoritative source, overrides localStorage)
-void Promise.all([
-  getSetting("theme"),
-  getSetting("sidebar_width"),
-  getSetting("sidebar_collapsed"),
-  getSetting("ui_zoom"),
-]).then(([dbTheme, dbWidth, dbCollapsed, dbZoom]) => {
-  const state = useUiStore.getState();
+/**
+ * Bootstrap UI state from SQLite and subscribe to OS theme changes.
+ * Call once from App when the component mounts — NOT at module load time
+ * (that made tests flaky and tied side-effects to import order).
+ *
+ * Returns a cleanup function that removes the matchMedia listener.
+ */
+export function initUi(): () => void {
+  // Restore UI settings from SQLite (authoritative source, overrides localStorage)
+  void Promise.all([
+    getSetting("theme"),
+    getSetting("sidebar_width"),
+    getSetting("sidebar_collapsed"),
+    getSetting("ui_zoom"),
+  ]).then(([dbTheme, dbWidth, dbCollapsed, dbZoom]) => {
+    const state = useUiStore.getState();
 
-  if (dbTheme && isValidTheme(dbTheme) && dbTheme !== state.theme) {
-    state.setTheme(dbTheme as Theme);
-  }
-
-  const updates: Partial<Pick<UiState, "sidebarWidth" | "sidebarCollapsed">> = {};
-  if (dbWidth) {
-    const w = parseInt(dbWidth, 10);
-    if (!isNaN(w) && w !== state.sidebarWidth) {
-      updates.sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
+    if (dbTheme && isValidTheme(dbTheme) && dbTheme !== state.theme) {
+      state.setTheme(dbTheme as Theme);
     }
-  }
-  if (dbCollapsed !== null) {
-    const collapsed = dbCollapsed === "true";
-    if (collapsed !== state.sidebarCollapsed) {
-      updates.sidebarCollapsed = collapsed;
-    }
-  }
-  if (Object.keys(updates).length > 0) {
-    useUiStore.setState(updates);
-  }
 
-  if (dbZoom) {
-    const z = parseFloat(dbZoom);
-    if (!isNaN(z) && z !== state.uiZoom) {
-      state.setUiZoom(z);
-    }
-  }
-});
-
-// Listen for OS theme changes — update CSS vars when preference is "system".
-// Guarded against missing matchMedia (test environments, legacy WebViews).
-if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
-  window
-    .matchMedia("(prefers-color-scheme: light)")
-    .addEventListener("change", () => {
-      const { theme } = useUiStore.getState();
-      if (theme === "system") {
-        applyTheme("system");
+    const updates: Partial<Pick<UiState, "sidebarWidth" | "sidebarCollapsed">> = {};
+    if (dbWidth) {
+      const w = parseInt(dbWidth, 10);
+      if (!isNaN(w) && w !== state.sidebarWidth) {
+        updates.sidebarWidth = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w));
       }
-    });
+    }
+    if (dbCollapsed !== null) {
+      const collapsed = dbCollapsed === "true";
+      if (collapsed !== state.sidebarCollapsed) {
+        updates.sidebarCollapsed = collapsed;
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      useUiStore.setState(updates);
+    }
+
+    if (dbZoom) {
+      const z = parseFloat(dbZoom);
+      if (!isNaN(z) && z !== state.uiZoom) {
+        state.setUiZoom(z);
+      }
+    }
+  });
+
+  // Listen for OS theme changes — update CSS vars when preference is "system".
+  // Guarded against missing matchMedia (test environments, legacy WebViews).
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => {};
+  }
+  const mq = window.matchMedia("(prefers-color-scheme: light)");
+  const handler = () => {
+    if (useUiStore.getState().theme === "system") applyTheme("system");
+  };
+  mq.addEventListener("change", handler);
+  return () => mq.removeEventListener("change", handler);
 }

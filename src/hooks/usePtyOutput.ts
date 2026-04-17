@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { writeToTerminal } from "../components/TerminalPane";
+import { writeToTerminal } from "../lib/terminalPool";
 import { notifySessionExit } from "../lib/api";
 import { getGitStatus, removeWorktree, clearWorktreePath } from "../lib/git";
 import { useSessionStore } from "../store/sessionStore";

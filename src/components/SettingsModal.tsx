@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useUiStore } from "../store/uiStore";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSettingsStore, FONT_FAMILIES } from "../store/settingsStore";
 import { checkClaudeHooks, installClaudeHooks } from "../lib/api";
 import { isPermissionGranted } from "@tauri-apps/plugin-notification";
@@ -45,13 +46,7 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
     isPermissionGranted().then(setNotifGranted).catch(() => setNotifGranted(false));
   }, []);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeSettings();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [closeSettings]);
+  useEscapeKey(closeSettings);
 
   const handleInstallHooks = async () => {
     setHooksLoading(true);
