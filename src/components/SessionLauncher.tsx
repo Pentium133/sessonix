@@ -273,8 +273,10 @@ export default function SessionLauncher(props: SessionLauncherProps) {
           onKeyDown={(e) => { if (e.key === "Enter") handleLaunch(); }}
         />
 
-        {/* Initial prompt */}
-        {selectedAgent.type !== "custom" && (
+        {/* Initial prompt. Hidden for non-"new" session modes of agents that
+            only honor a prompt on fresh sessions — prevents silent data loss
+            where a user types a prompt that buildAgentArgs then drops. */}
+        {selectedAgent.type !== "custom" && (agentOptionsSpec == null || sessionMode === "new") && (
           <textarea
             className="launcher-input launcher-prompt"
             placeholder={selectedAgent.type === "shell" ? "Initial command (optional)" : "Enter a task for the agent... (optional)"}
