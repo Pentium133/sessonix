@@ -15,6 +15,7 @@ import ToastContainer, { showToast } from "./components/Toast";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { usePtyOutput } from "./hooks/usePtyOutput";
 import { useStatusPolling } from "./hooks/useStatusPolling";
+import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import type { AgentType } from "./lib/types";
 import { useSessionStore } from "./store/sessionStore";
 import { useProjectStore } from "./store/projectStore";
@@ -143,141 +144,7 @@ function App() {
   }, []);
 
   // Keyboard shortcuts
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      const store = useSessionStore.getState();
-      const pStore = useProjectStore.getState();
-      const ui = useUiStore.getState();
-
-      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
-        e.preventDefault();
-        const { settingsOpen, openSettings, closeSettings } = useUiStore.getState();
-        if (settingsOpen) closeSettings(); else openSettings();
-        return;
-      }
-      if (e.metaKey && e.shiftKey && e.key === "K") {
-        e.preventDefault();
-        ui.openLauncher({ open: true, mode: "project" });
-        return;
-      }
-      if (e.metaKey && e.shiftKey && e.key === "T") {
-        e.preventDefault();
-        if (pStore.activeProjectPath) {
-          ui.openLauncher({ open: true, mode: "session", projectPath: pStore.activeProjectPath });
-        } else if (pStore.projects.length > 0) {
-          ui.openLauncher({ open: true, mode: "session", projectPath: pStore.projects[0].path });
-        } else {
-          ui.openLauncher({ open: true, mode: "project" });
-        }
-        return;
-      }
-      if (e.metaKey && e.shiftKey && e.key === "W") {
-        e.preventDefault();
-        if (store.activeSessionId !== null) {
-          store.removeSession(store.activeSessionId);
-        }
-        return;
-      }
-      // Zoom: Cmd+= / Cmd+- / Cmd+0
-      if ((e.metaKey || e.ctrlKey) && (e.key === "=" || e.key === "+")) {
-        e.preventDefault();
-        ui.zoomIn();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "-") {
-        e.preventDefault();
-        ui.zoomOut();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "0") {
-        e.preventDefault();
-        ui.resetZoom();
-        return;
-      }
-      // Ctrl+1-9: switch projects
-      if (e.ctrlKey && !e.metaKey && !e.shiftKey && e.key >= "1" && e.key <= "9") {
-        const idx = parseInt(e.key) - 1;
-        if (idx < pStore.projects.length) {
-          e.preventDefault();
-          const targetPath = pStore.projects[idx].path;
-          if (targetPath !== pStore.activeProjectPath) {
-            // Remember current session before leaving
-            if (pStore.activeProjectPath && store.activeSessionId != null) {
-              pStore.setLastActiveSession(pStore.activeProjectPath, store.activeSessionId);
-            }
-            pStore.setActiveProjectPath(targetPath);
-            // Restore last active session in target project
-            const projectSessions = store.sessions
-              .filter((s) => s.working_dir === targetPath)
-              .sort((a, b) => a.sortOrder - b.sortOrder);
-            if (projectSessions.length > 0) {
-              const lastId = pStore.lastActiveSession[targetPath];
-              const target = projectSessions.find((s) => s.id === lastId) ?? projectSessions[0];
-              store.switchSession(target.id);
-            }
-          }
-        }
-        return;
-      }
-      // Cmd+1-9: switch sessions within active project
-      if (e.metaKey && e.key >= "1" && e.key <= "9") {
-        const activePath = pStore.activeProjectPath;
-        const projectSessions = store.sessions
-          .filter((s) => s.working_dir === activePath)
-          .sort((a, b) => a.sortOrder - b.sortOrder);
-        const idx = parseInt(e.key) - 1;
-        if (idx < projectSessions.length) {
-          e.preventDefault();
-          store.switchSession(projectSessions[idx].id);
-        }
-        return;
-      }
-      // Cmd+Left/Right: prev/next session within active project
-      if (e.metaKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        const activePath = pStore.activeProjectPath;
-        if (!activePath) return;
-        const projectSessions = store.sessions
-          .filter((s) => s.working_dir === activePath)
-          .sort((a, b) => a.sortOrder - b.sortOrder);
-        if (projectSessions.length < 2) return;
-        const currentIdx = projectSessions.findIndex((s) => s.id === store.activeSessionId);
-        const nextIdx = e.key === "ArrowRight"
-          ? (currentIdx + 1) % projectSessions.length
-          : (currentIdx - 1 + projectSessions.length) % projectSessions.length;
-        e.preventDefault();
-        store.switchSession(projectSessions[nextIdx].id);
-        return;
-      }
-      // Cmd+Up/Down: prev/next project
-      if (e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-        if (pStore.projects.length < 2) return;
-        const currentIdx = pStore.projects.findIndex((p) => p.path === pStore.activeProjectPath);
-        const nextIdx = e.key === "ArrowDown"
-          ? (currentIdx + 1) % pStore.projects.length
-          : (currentIdx - 1 + pStore.projects.length) % pStore.projects.length;
-        const targetPath = pStore.projects[nextIdx].path;
-        e.preventDefault();
-        // Remember current session before leaving
-        if (pStore.activeProjectPath && store.activeSessionId != null) {
-          pStore.setLastActiveSession(pStore.activeProjectPath, store.activeSessionId);
-        }
-        pStore.setActiveProjectPath(targetPath);
-        // Restore last active session in target project
-        const projectSessions = store.sessions
-          .filter((s) => s.working_dir === targetPath)
-          .sort((a, b) => a.sortOrder - b.sortOrder);
-        if (projectSessions.length > 0) {
-          const lastId = pStore.lastActiveSession[targetPath];
-          const target = projectSessions.find((s) => s.id === lastId) ?? projectSessions[0];
-          store.switchSession(target.id);
-        }
-        return;
-      }
-    }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  useGlobalShortcuts();
 
   // Close confirmation when running sessions exist
   useEffect(() => {
