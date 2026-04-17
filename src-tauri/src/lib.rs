@@ -428,7 +428,7 @@ fn delete_quick_prompt(state: tauri::State<'_, SessionManager>, id: i64) -> Resu
 
 #[tauri::command]
 fn update_quick_prompt(state: tauri::State<'_, SessionManager>, id: i64, name: String, initial_prompt: Option<String>) -> Result<(), String> {
-    state.db.update_quick_prompt(id, &name, "", initial_prompt.as_deref(), false).map_err(|e| e.to_string())
+    state.db.update_quick_prompt(id, &name, initial_prompt.as_deref()).map_err(|e| e.to_string())
 }
 
 // --- Tasks (worktree-scoped session groups) ---

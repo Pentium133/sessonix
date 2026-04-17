@@ -208,6 +208,17 @@ impl Db {
             .is_ok();
         if has_legacy_templates && !has_quick_prompts {
             conn.execute_batch("ALTER TABLE templates RENAME TO quick_prompts;")?;
+        } else if has_legacy_templates && has_quick_prompts {
+            // Split-brain: both tables exist (e.g. user bounced between old/new
+            // branches of a dogfooding worktree). Copy orphaned rows into the
+            // live table and drop the legacy one. `INSERT OR IGNORE` skips
+            // rows whose PK already landed in quick_prompts.
+            conn.execute_batch(
+                "INSERT OR IGNORE INTO quick_prompts
+                   SELECT id, name, project_path, agent, initial_prompt, skip_permissions, created_at
+                   FROM templates;
+                 DROP TABLE templates;",
+            )?;
         }
 
         // Quick prompts table
@@ -738,14 +749,12 @@ impl Db {
         &self,
         id: i64,
         name: &str,
-        agent: &str,
         initial_prompt: Option<&str>,
-        skip_permissions: bool,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute(
-            "UPDATE quick_prompts SET name = ?1, agent = ?2, initial_prompt = ?3, skip_permissions = ?4 WHERE id = ?5",
-            params![name, agent, initial_prompt, skip_permissions as i32, id],
+            "UPDATE quick_prompts SET name = ?1, initial_prompt = ?2 WHERE id = ?3",
+            params![name, initial_prompt, id],
         )?;
         Ok(())
     }
@@ -1239,5 +1248,128 @@ mod tests {
         let sessions = db.list_sessions_for_project(pid).unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].task_id, None);
+    }
+
+    #[test]
+    fn test_quick_prompt_crud() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_quick_prompt("Greet", "/tmp/p", "claude", Some("say hi"), true)
+            .unwrap();
+        assert!(id > 0);
+
+        let rows = db.list_quick_prompts("/tmp/p").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Greet");
+        assert_eq!(rows[0].agent, "claude");
+        assert_eq!(rows[0].initial_prompt.as_deref(), Some("say hi"));
+        assert!(rows[0].skip_permissions);
+
+        // Filter by project_path
+        db.insert_quick_prompt("Other", "/tmp/other", "", None, false).unwrap();
+        assert_eq!(db.list_quick_prompts("/tmp/p").unwrap().len(), 1);
+
+        db.delete_quick_prompt(id).unwrap();
+        assert!(db.list_quick_prompts("/tmp/p").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_update_quick_prompt_preserves_agent_and_skip_permissions() {
+        // Regression guard: update_quick_prompt must not clobber `agent`
+        // or `skip_permissions` (they are not editable from the UI).
+        let db = Db::open_in_memory().unwrap();
+        let id = db
+            .insert_quick_prompt("orig", "/tmp/p", "codex", Some("body"), true)
+            .unwrap();
+
+        db.update_quick_prompt(id, "renamed", Some("new body")).unwrap();
+
+        let rows = db.list_quick_prompts("/tmp/p").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "renamed");
+        assert_eq!(rows[0].initial_prompt.as_deref(), Some("new body"));
+        assert_eq!(rows[0].agent, "codex", "agent must be preserved on update");
+        assert!(rows[0].skip_permissions, "skip_permissions must be preserved on update");
+    }
+
+    #[test]
+    fn test_migration_renames_legacy_templates_table() {
+        // Simulate a DB that only has the old `templates` table with data,
+        // then run migrate() and verify the rows land in `quick_prompts`.
+        let db = Db::open_in_memory().unwrap();
+        {
+            let conn = db.conn.lock();
+            conn.execute_batch(
+                "DROP TABLE quick_prompts;
+                 CREATE TABLE templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    project_path TEXT NOT NULL,
+                    agent TEXT NOT NULL DEFAULT '',
+                    initial_prompt TEXT,
+                    skip_permissions INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                 );
+                 INSERT INTO templates (name, project_path, agent, initial_prompt, skip_permissions)
+                    VALUES ('legacy', '/tmp/p', 'claude', 'hi', 1);",
+            ).unwrap();
+        }
+
+        db.migrate().unwrap();
+
+        // templates gone, quick_prompts carries the row.
+        let rows = db.list_quick_prompts("/tmp/p").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "legacy");
+        assert_eq!(rows[0].agent, "claude");
+        assert_eq!(rows[0].initial_prompt.as_deref(), Some("hi"));
+        assert!(rows[0].skip_permissions);
+
+        let conn = db.conn.lock();
+        let legacy_exists = conn.prepare("SELECT 1 FROM templates LIMIT 0").is_ok();
+        assert!(!legacy_exists, "legacy `templates` table should be removed");
+    }
+
+    #[test]
+    fn test_migration_split_brain_merges_and_drops_legacy() {
+        // Simulate the dogfooding worktree case: both tables exist
+        // (old branch created `templates` with data; new branch previously
+        // created an empty `quick_prompts`). Migration must merge the
+        // orphaned rows and drop the legacy table without data loss.
+        let db = Db::open_in_memory().unwrap();
+        {
+            let conn = db.conn.lock();
+            conn.execute_batch(
+                "CREATE TABLE templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    project_path TEXT NOT NULL,
+                    agent TEXT NOT NULL DEFAULT '',
+                    initial_prompt TEXT,
+                    skip_permissions INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                 );
+                 -- Legacy row, id=10
+                 INSERT INTO templates (id, name, project_path, agent, initial_prompt, skip_permissions)
+                    VALUES (10, 'from-legacy', '/tmp/p', 'codex', 'old', 0);",
+            ).unwrap();
+        }
+        // Insert a row into the current `quick_prompts` to simulate the new branch
+        // having already created data; the legacy row must merge alongside.
+        db.insert_quick_prompt("from-new", "/tmp/p", "claude", Some("fresh"), true).unwrap();
+
+        db.migrate().unwrap();
+
+        let mut rows = db.list_quick_prompts("/tmp/p").unwrap();
+        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(rows.len(), 2, "legacy and new rows must coexist after merge");
+        assert_eq!(rows[0].name, "from-legacy");
+        assert_eq!(rows[0].agent, "codex");
+        assert_eq!(rows[1].name, "from-new");
+        assert_eq!(rows[1].agent, "claude");
+
+        let conn = db.conn.lock();
+        let legacy_exists = conn.prepare("SELECT 1 FROM templates LIMIT 0").is_ok();
+        assert!(!legacy_exists, "legacy `templates` table should be dropped after merge");
     }
 }
