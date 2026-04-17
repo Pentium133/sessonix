@@ -35,8 +35,9 @@ describe("SessionLauncher", () => {
     expect(screen.getByText("gemini")).toBeTruthy();
     expect(screen.getByText("codex")).toBeTruthy();
     expect(screen.getByText("opencode")).toBeTruthy();
+    expect(screen.getByText("cursor")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
-    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(6);
+    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(7);
   });
 
   it("defaults to claude agent", () => {
