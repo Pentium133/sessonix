@@ -138,6 +138,13 @@ export async function reorderSession(
   return invoke<void>("reorder_session", { ptyId, newSortOrder });
 }
 
+export async function reorderProject(
+  path: string,
+  newSortOrder: number
+): Promise<void> {
+  return invoke<void>("reorder_project", { path, newSortOrder });
+}
+
 export async function setSortOrder(
   ptyId: number,
   sortOrder: number
