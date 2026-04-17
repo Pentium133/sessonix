@@ -991,6 +991,43 @@ body {
   color: var(--text-dim);
 }
 
+/* Native <select> styled to match .launcher-input. The inline SVG chevron
+   uses a neutral gray that works on both light and dark surfaces so we can
+   stay off of per-theme overrides. */
+.launcher-select {
+  width: 100%;
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 2.5) calc(var(--space) * 9) calc(var(--space) * 2.5) calc(var(--space) * 3);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin-bottom: calc(var(--space) * 3);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right calc(var(--space) * 3) center;
+  transition: border-color 120ms ease;
+}
+
+.launcher-select:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+.launcher-select:focus {
+  border-color: var(--accent);
+}
+
+.launcher-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .launcher-prompt {
   resize: vertical;
   min-height: calc(var(--space) * 18);

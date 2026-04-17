@@ -167,11 +167,10 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
         </div>
 
         <select
-          className="launcher-input"
+          className="launcher-select"
           value={selectedSource}
           onChange={(e) => handleSourceChange(e.target.value)}
           disabled={branchesLoading}
-          style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
           data-testid="task-source-select"
         >
           <option value={CREATE_NEW}>(create new branch)</option>
