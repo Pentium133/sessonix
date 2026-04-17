@@ -351,6 +351,18 @@ fn reorder_session(
 }
 
 #[tauri::command]
+fn reorder_project(
+    state: tauri::State<'_, SessionManager>,
+    path: String,
+    new_sort_order: u32,
+) -> Result<(), String> {
+    state
+        .db
+        .reorder_project(&path, new_sort_order)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn set_sort_order(
     state: tauri::State<'_, SessionManager>,
     pty_id: u32,
@@ -1099,6 +1111,7 @@ pub fn run() {
             delete_session,
             notify_session_exit,
             reorder_session,
+            reorder_project,
             set_sort_order,
             get_running_session_count,
             force_exit,
