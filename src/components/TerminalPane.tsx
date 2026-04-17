@@ -6,13 +6,19 @@ import "@xterm/xterm/css/xterm.css";
 import { writeToSession, resizeSession, saveScrollback, getScrollback } from "../lib/api";
 import { useSettingsStore } from "../store/settingsStore";
 import { getThemeById, resolveSystemTheme } from "../lib/themes";
+import {
+  MAX_LIVE_TERMINALS,
+  type TerminalInstance,
+  deleteTerminal,
+  findLRUVictim,
+  getTerminal,
+  poolEntries,
+  poolSize,
+  setTerminal,
+  touchAccessOrder,
+} from "../lib/terminalPool";
 
-interface TerminalInstance {
-  terminal: Terminal;
-  fitAddon: FitAddon;
-  serializeAddon: SerializeAddon;
-  disposed: boolean;
-}
+export { writeToTerminal, focusTerminal } from "../lib/terminalPool";
 
 function getTerminalTheme() {
   const attr = document.documentElement.getAttribute("data-theme");
@@ -22,10 +28,6 @@ function getTerminalTheme() {
 }
 
 const SAVE_INTERVAL_MS = 30_000; // 30 seconds
-const MAX_LIVE_TERMINALS = 5;
-
-// Track access order for LRU eviction
-const accessOrder: number[] = [];
 
 interface TerminalPaneProps {
   activeSessionId: number | null;
@@ -33,24 +35,13 @@ interface TerminalPaneProps {
   isActiveSessionExited?: boolean;
 }
 
-// Persistent terminal instances keyed by session ID (PTY id)
-const terminalPool = new Map<number, TerminalInstance>();
-
-function touchAccessOrder(sessionId: number) {
-  const idx = accessOrder.indexOf(sessionId);
-  if (idx !== -1) accessOrder.splice(idx, 1);
-  accessOrder.push(sessionId);
-}
-
 function evictLRU(keepId: number, containerEl?: HTMLDivElement | null) {
-  while (terminalPool.size > MAX_LIVE_TERMINALS) {
-    // Find the least recently used terminal (not the one we're about to show)
-    const victim = accessOrder.find((id) => id !== keepId && terminalPool.has(id));
+  while (poolSize() > MAX_LIVE_TERMINALS) {
+    const victim = findLRUVictim(keepId);
     if (victim === undefined) break;
 
-    const instance = terminalPool.get(victim);
+    const instance = getTerminal(victim);
     if (instance && !instance.disposed) {
-      // Save scrollback before evicting
       try {
         const data = instance.serializeAddon.serialize();
         saveScrollback(victim, data).catch(() => {});
@@ -58,11 +49,8 @@ function evictLRU(keepId: number, containerEl?: HTMLDivElement | null) {
       instance.terminal.dispose();
       instance.disposed = true;
     }
-    terminalPool.delete(victim);
-    const idx = accessOrder.indexOf(victim);
-    if (idx !== -1) accessOrder.splice(idx, 1);
+    deleteTerminal(victim);
 
-    // Remove DOM wrapper
     if (containerEl) {
       const wrapper = containerEl.querySelector(`[data-session-id="${victim}"]`);
       wrapper?.remove();
@@ -81,7 +69,7 @@ export default function TerminalPane({
 
   // Live-update font settings on all active terminals
   useEffect(() => {
-    for (const [, inst] of terminalPool) {
+    for (const [, inst] of poolEntries()) {
       if (inst.disposed) continue;
       inst.terminal.options.fontSize = terminalFontSize;
       inst.terminal.options.fontFamily = terminalFontFamily;
@@ -91,7 +79,7 @@ export default function TerminalPane({
 
   const getOrCreateTerminal = useCallback(
     (sessionId: number, readOnly = false): TerminalInstance => {
-      const existing = terminalPool.get(sessionId);
+      const existing = getTerminal(sessionId);
       if (existing && !existing.disposed) return existing;
 
       const settings = useSettingsStore.getState();
@@ -129,7 +117,7 @@ export default function TerminalPane({
         serializeAddon,
         disposed: false,
       };
-      terminalPool.set(sessionId, instance);
+      setTerminal(sessionId, instance);
       return instance;
     },
     []
@@ -139,19 +127,22 @@ export default function TerminalPane({
   useEffect(() => {
     if (activeSessionId === null || !isActiveSessionExited) return;
 
-    // Only restore once per session
-    const instance = terminalPool.get(activeSessionId);
+    const instance = getTerminal(activeSessionId);
     if (!instance || instance.disposed) return;
-    if ((instance as TerminalInstance & { _scrollbackRestored?: boolean })._scrollbackRestored) return;
+    if (instance.scrollbackRestored) return;
 
     getScrollback(activeSessionId).then((data) => {
       if (data) {
         instance.terminal.write(data);
-        (instance as TerminalInstance & { _scrollbackRestored?: boolean })._scrollbackRestored = true;
+        instance.scrollbackRestored = true;
       }
     }).catch(console.error);
   }, [activeSessionId, isActiveSessionExited]);
 
+  // `isActiveSessionExited` is read inside this effect but intentionally not in
+  // deps: xterm's `disableStdin` is only applied at terminal *creation*, so a
+  // status tick flipping running → exited on the currently-attached terminal
+  // shouldn't remount it. The effect only fires on session switch.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || activeSessionId === null) return;
@@ -191,24 +182,23 @@ export default function TerminalPane({
         }
       });
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, getOrCreateTerminal]);
 
   // Theme sync: update all live terminals when theme changes (manual toggle or OS)
   useEffect(() => {
     const applyTheme = () => {
       const theme = getTerminalTheme();
-      for (const [, instance] of terminalPool) {
+      for (const [, instance] of poolEntries()) {
         if (!instance.disposed) {
           instance.terminal.options.theme = theme;
         }
       }
     };
 
-    // Listen for OS theme changes
     const mq = window.matchMedia("(prefers-color-scheme: light)");
     mq.addEventListener("change", applyTheme);
 
-    // Listen for manual data-theme attribute changes
     const observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
         if (m.attributeName === "data-theme") {
@@ -232,7 +222,7 @@ export default function TerminalPane({
 
     const observer = new ResizeObserver(() => {
       if (activeSessionId === null) return;
-      const instance = terminalPool.get(activeSessionId);
+      const instance = getTerminal(activeSessionId);
       if (instance && !instance.disposed) {
         requestAnimationFrame(() => {
           instance.fitAddon.fit();
@@ -248,7 +238,7 @@ export default function TerminalPane({
   useEffect(() => {
     const interval = setInterval(() => {
       if (activeSessionId === null) return;
-      const instance = terminalPool.get(activeSessionId);
+      const instance = getTerminal(activeSessionId);
       if (!instance || instance.disposed) return;
       try {
         const data = instance.serializeAddon.serialize();
@@ -264,9 +254,8 @@ export default function TerminalPane({
   // Cleanup destroyed sessions (save scrollback before disposing)
   useEffect(() => {
     const activeIds = new Set(sessionIds);
-    for (const [id, instance] of terminalPool) {
+    for (const [id, instance] of poolEntries()) {
       if (!activeIds.has(id)) {
-        // Save final scrollback
         try {
           const data = instance.serializeAddon.serialize();
           saveScrollback(id, data).catch(() => {});
@@ -275,10 +264,7 @@ export default function TerminalPane({
         }
         instance.terminal.dispose();
         instance.disposed = true;
-        terminalPool.delete(id);
-        // Clean up access order to prevent memory leak
-        const aoIdx = accessOrder.indexOf(id);
-        if (aoIdx !== -1) accessOrder.splice(aoIdx, 1);
+        deleteTerminal(id);
         const container = containerRef.current;
         if (container) {
           const wrapper = container.querySelector(
@@ -303,19 +289,3 @@ export default function TerminalPane({
     />
   );
 }
-
-// Write binary data to a terminal
-export function writeToTerminal(sessionId: number, data: Uint8Array) {
-  const instance = terminalPool.get(sessionId);
-  if (instance && !instance.disposed) {
-    instance.terminal.write(data);
-  }
-}
-
-export function focusTerminal(sessionId: number) {
-  const instance = terminalPool.get(sessionId);
-  if (instance && !instance.disposed) {
-    instance.terminal.focus();
-  }
-}
-

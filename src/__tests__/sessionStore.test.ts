@@ -16,7 +16,7 @@ vi.mock("../lib/api", () => ({
   setSortOrder: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../components/TerminalPane", () => ({
+vi.mock("../lib/terminalPool", () => ({
   writeToTerminal: vi.fn(),
 }));
 

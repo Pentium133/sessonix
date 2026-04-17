@@ -12,7 +12,7 @@ import {
   reorderSession,
   setSortOrder,
 } from "../lib/api";
-import { writeToTerminal } from "../components/TerminalPane";
+import { writeToTerminal } from "../lib/terminalPool";
 import { useProjectStore } from "./projectStore";
 import type { AgentType, GitStatus, Session, SessionStatus } from "../lib/types";
 
