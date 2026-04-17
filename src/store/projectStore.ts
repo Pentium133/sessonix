@@ -4,6 +4,7 @@ import type { Project } from "../lib/types";
 import {
   addProject as apiAddProject,
   removeProject as apiRemoveProject,
+  reorderProject as apiReorderProject,
   killSession,
 } from "../lib/api";
 
@@ -30,6 +31,9 @@ interface ProjectState {
   addSessionToProject: (path: string, sessionId: number) => void;
   removeSessionFromProject: (sessionId: number) => void;
   replaceSessionInProject: (path: string, oldId: number, newId: number) => void;
+
+  // Reorder: optimistic local move, then persist via reorder_project IPC.
+  reorderProjects: (fromPath: string, toPath: string) => void;
 }
 
 export const useProjectStore = create<ProjectState>()(
@@ -119,6 +123,30 @@ export const useProjectStore = create<ProjectState>()(
           : p
       ),
     }));
+  },
+
+  reorderProjects: (fromPath, toPath) => {
+    if (fromPath === toPath) return;
+    let backendOrder = -1;
+    set((state) => {
+      const from = state.projects.findIndex((p) => p.path === fromPath);
+      const to = state.projects.findIndex((p) => p.path === toPath);
+      if (from === -1 || to === -1) return state;
+      const next = state.projects.slice();
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      backendOrder = to + 1; // 1-based for SQL sort_order
+      return { projects: next };
+    });
+    if (backendOrder > 0) {
+      // Fire-and-forget: no UI rollback on failure (intentional, see SPEC-001
+      // "Out of Scope"). DB lock or missing-path errors self-heal on next
+      // restart since restore() reads order from the DB. Mirrors the existing
+      // reorderSession policy.
+      apiReorderProject(fromPath, backendOrder).catch((e) => {
+        console.error("[reorderProject] backend failed:", e);
+      });
+    }
   },
     }),
     {

@@ -1,11 +1,30 @@
+import { useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useProjectStore } from "../store/projectStore";
 import { useSessionStore } from "../store/sessionStore";
 import { useUiStore } from "../store/uiStore";
+import type { Project } from "../lib/types";
 
 export default function ProjectRail() {
   const projects = useProjectStore((s) => s.projects);
   const activeProjectPath = useProjectStore((s) => s.activeProjectPath);
   const setActiveProjectPath = useProjectStore((s) => s.setActiveProjectPath);
+  const reorderProjects = useProjectStore((s) => s.reorderProjects);
   const sessions = useSessionStore((s) => s.sessions);
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const switchSession = useSessionStore((s) => s.switchSession);
@@ -13,12 +32,18 @@ export default function ProjectRail() {
   const toggleCollapse = useUiStore((s) => s.toggleCollapse);
   const openSettings = useUiStore((s) => s.openSettings);
 
+  const [draggingPath, setDraggingPath] = useState<string | null>(null);
+
+  // 5px distance avoids hijacking clicks. Click still switches project.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  );
+
   const onAddProject = () => {
     useUiStore.getState().openLauncher({ open: true, mode: "project" });
   };
 
   const handleProjectClick = (projectPath: string) => {
-    // Remember current session for the project we're leaving
     const currentProject = useProjectStore.getState().activeProjectPath;
     if (currentProject && activeSessionId != null) {
       useProjectStore.getState().setLastActiveSession(currentProject, activeSessionId);
@@ -26,7 +51,6 @@ export default function ProjectRail() {
 
     setActiveProjectPath(projectPath);
 
-    // Restore last active session in target project, fallback to first
     const projectSessions = sessions
       .filter((s) => s.working_dir === projectPath)
       .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -37,6 +61,21 @@ export default function ProjectRail() {
       switchSession(target.id);
     }
   };
+
+  const handleDragStart = (e: DragStartEvent) => {
+    setDraggingPath(String(e.active.id));
+  };
+
+  const handleDragEnd = (e: DragEndEvent) => {
+    setDraggingPath(null);
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    reorderProjects(String(active.id), String(over.id));
+  };
+
+  const draggingProject = draggingPath
+    ? projects.find((p) => p.path === draggingPath)
+    : null;
 
   return (
     <div className="project-rail">
@@ -51,26 +90,47 @@ export default function ProjectRail() {
           </svg>
         </button>
       )}
-      {projects.map((project) => {
-        const isActive = project.path === activeProjectPath;
-        const runningCount = sessions.filter(
-          (s) => s.working_dir === project.path && s.status === "running"
-        ).length;
 
-        return (
-          <button
-            key={project.path}
-            className={`rail-project-btn${isActive ? " active" : ""}`}
-            onClick={() => handleProjectClick(project.path)}
-            title={project.name}
-          >
-            <span className="rail-project-letter">
-              {project.name[0]?.toUpperCase() ?? "?"}
-            </span>
-            {runningCount > 0 && <span className="rail-badge" />}
-          </button>
-        );
-      })}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setDraggingPath(null)}
+      >
+        <SortableContext
+          items={projects.map((p) => p.path)}
+          strategy={verticalListSortingStrategy}
+        >
+          {projects.map((project) => {
+            const isActive = project.path === activeProjectPath;
+            const runningCount = sessions.filter(
+              (s) => s.working_dir === project.path && s.status === "running"
+            ).length;
+
+            return (
+              <SortableProjectButton
+                key={project.path}
+                project={project}
+                isActive={isActive}
+                hasRunning={runningCount > 0}
+                onClick={() => handleProjectClick(project.path)}
+              />
+            );
+          })}
+        </SortableContext>
+
+        <DragOverlay>
+          {draggingProject ? (
+            <div className="rail-project-btn dragging-overlay">
+              <span className="rail-project-letter">
+                {draggingProject.name[0]?.toUpperCase() ?? "?"}
+              </span>
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+
       <button
         className="rail-add-btn"
         onClick={onAddProject}
@@ -92,5 +152,50 @@ export default function ProjectRail() {
         </svg>
       </button>
     </div>
+  );
+}
+
+interface SortableProjectButtonProps {
+  project: Project;
+  isActive: boolean;
+  hasRunning: boolean;
+  onClick: () => void;
+}
+
+function SortableProjectButton({
+  project,
+  isActive,
+  hasRunning,
+  onClick,
+}: SortableProjectButtonProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.path });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <button
+      ref={setNodeRef}
+      style={style}
+      className={`rail-project-btn${isActive ? " active" : ""}${isDragging ? " dragging" : ""}`}
+      onClick={onClick}
+      title={project.name}
+      {...attributes}
+      {...listeners}
+    >
+      <span className="rail-project-letter">
+        {project.name[0]?.toUpperCase() ?? "?"}
+      </span>
+      {hasRunning && <span className="rail-badge" />}
+    </button>
   );
 }

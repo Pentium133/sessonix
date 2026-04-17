@@ -11,6 +11,11 @@ pub struct ProjectRow {
     pub id: i64,
     pub name: String,
     pub path: String,
+    /// Used for ordering and asserted in tests; the IPC layer projects rows
+    /// in array order so this field is not currently serialized to the
+    /// frontend.
+    #[allow(dead_code)]
+    pub sort_order: u32,
 }
 
 /// Full row of the `sessions` table. Some fields are selected for schema
@@ -170,6 +175,25 @@ impl Db {
             )?;
         }
 
+        // Migration: add sort_order column to projects.
+        // Backfill in created_at, then id order so existing installs keep
+        // their visible ordering. New projects get MAX+1 on insert.
+        let has_proj_sort_col: bool = conn
+            .prepare("SELECT sort_order FROM projects LIMIT 0")
+            .is_ok();
+        if !has_proj_sort_col {
+            conn.execute_batch(
+                "ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            conn.execute_batch(
+                "UPDATE projects SET sort_order = (
+                    SELECT COUNT(*) FROM projects p2
+                    WHERE p2.created_at < projects.created_at
+                       OR (p2.created_at = projects.created_at AND p2.id <= projects.id)
+                );",
+            )?;
+        }
+
         // Migration: add worktree_path and base_commit columns (checked independently)
         let has_wt_col: bool = conn
             .prepare("SELECT worktree_path FROM sessions LIMIT 0")
@@ -271,8 +295,11 @@ impl Db {
 
     pub fn insert_project(&self, name: &str, path: &str) -> Result<i64, rusqlite::Error> {
         let conn = self.conn.lock();
+        // INSERT OR IGNORE skips on UNIQUE(path) conflict; sort_order comes from
+        // a subquery so duplicates do not bump the counter.
         conn.execute(
-            "INSERT OR IGNORE INTO projects (name, path) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO projects (name, path, sort_order)
+             SELECT ?1, ?2, COALESCE(MAX(sort_order), 0) + 1 FROM projects",
             params![name, path],
         )?;
         // Return existing or new id
@@ -287,7 +314,7 @@ impl Db {
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, rusqlite::Error> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, name, path FROM projects ORDER BY created_at DESC",
+            "SELECT id, name, path, sort_order FROM projects ORDER BY sort_order ASC, id ASC",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -295,10 +322,61 @@ impl Db {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     path: row.get(2)?,
+                    sort_order: row.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    pub fn reorder_project(&self, path: &str, new_order: u32) -> Result<(), rusqlite::Error> {
+        if new_order < 1 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "new_order must be >= 1".to_string(),
+            ));
+        }
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        let old_order: u32 = tx.query_row(
+            "SELECT sort_order FROM projects WHERE path = ?1",
+            params![path],
+            |row| row.get(0),
+        )?;
+
+        if old_order == new_order {
+            return Ok(());
+        }
+
+        // Clamp new_order to [1, count]
+        let count: u32 = tx.query_row(
+            "SELECT COUNT(*) FROM projects",
+            [],
+            |row| row.get(0),
+        )?;
+        let clamped = new_order.min(count).max(1);
+
+        if old_order > clamped {
+            // Moving up: shift the slice [clamped, old_order) down by 1
+            tx.execute(
+                "UPDATE projects SET sort_order = sort_order + 1
+                 WHERE sort_order >= ?1 AND sort_order < ?2",
+                params![clamped, old_order],
+            )?;
+        } else {
+            // Moving down: shift the slice (old_order, clamped] up by 1
+            tx.execute(
+                "UPDATE projects SET sort_order = sort_order - 1
+                 WHERE sort_order > ?1 AND sort_order <= ?2",
+                params![old_order, clamped],
+            )?;
+        }
+        tx.execute(
+            "UPDATE projects SET sort_order = ?1 WHERE path = ?2",
+            params![clamped, path],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn find_project_id_by_path(&self, path: &str) -> Result<Option<i64>, rusqlite::Error> {
@@ -829,6 +907,180 @@ mod tests {
 
         db.delete_project("/home/user/myapp").unwrap();
         assert_eq!(db.list_projects().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_list_projects_preserves_insertion_order() {
+        // Regression: new projects appear at the bottom on create, but used to jump
+        // to the top after restart because list_projects ordered by created_at DESC.
+        // After SPEC-001, ordering is driven by sort_order (assigned MAX+1 on insert).
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("alpha", "/tmp/alpha").unwrap();
+        db.insert_project("beta", "/tmp/beta").unwrap();
+        db.insert_project("gamma", "/tmp/gamma").unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 3);
+        assert_eq!(projects[0].path, "/tmp/alpha");
+        assert_eq!(projects[1].path, "/tmp/beta");
+        assert_eq!(projects[2].path, "/tmp/gamma");
+    }
+
+    #[test]
+    fn test_insert_project_assigns_next_sort_order() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+        db.insert_project("c", "/tmp/c").unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects[0].sort_order, 1);
+        assert_eq!(projects[1].sort_order, 2);
+        assert_eq!(projects[2].sort_order, 3);
+    }
+
+    #[test]
+    fn test_insert_duplicate_does_not_bump_sort_order() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("a", "/tmp/a").unwrap(); // duplicate
+        db.insert_project("a", "/tmp/a").unwrap(); // duplicate
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].sort_order, 1, "duplicate inserts must not advance sort_order");
+    }
+
+    #[test]
+    fn test_reorder_project_move_up() {
+        // [a=1, b=2, c=3] → move c to position 1 → [c=1, a=2, b=3]
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+        db.insert_project("c", "/tmp/c").unwrap();
+
+        db.reorder_project("/tmp/c", 1).unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects[0].path, "/tmp/c");
+        assert_eq!(projects[0].sort_order, 1);
+        assert_eq!(projects[1].path, "/tmp/a");
+        assert_eq!(projects[1].sort_order, 2);
+        assert_eq!(projects[2].path, "/tmp/b");
+        assert_eq!(projects[2].sort_order, 3);
+    }
+
+    #[test]
+    fn test_reorder_project_move_down() {
+        // [a=1, b=2, c=3] → move a to position 3 → [b=1, c=2, a=3]
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+        db.insert_project("c", "/tmp/c").unwrap();
+
+        db.reorder_project("/tmp/a", 3).unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects[0].path, "/tmp/b");
+        assert_eq!(projects[0].sort_order, 1);
+        assert_eq!(projects[1].path, "/tmp/c");
+        assert_eq!(projects[1].sort_order, 2);
+        assert_eq!(projects[2].path, "/tmp/a");
+        assert_eq!(projects[2].sort_order, 3);
+    }
+
+    #[test]
+    fn test_reorder_project_clamps_above_count() {
+        // [a=1, b=2] → move a to position 999 → [b=1, a=2]
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+
+        db.reorder_project("/tmp/a", 999).unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects[0].path, "/tmp/b");
+        assert_eq!(projects[1].path, "/tmp/a");
+    }
+
+    #[test]
+    fn test_reorder_project_zero_errors() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        let result = db.reorder_project("/tmp/a", 0);
+        assert!(result.is_err(), "new_order < 1 must error");
+    }
+
+    #[test]
+    fn test_reorder_project_same_position_noop() {
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+
+        db.reorder_project("/tmp/b", 2).unwrap(); // already at 2
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects[0].path, "/tmp/a");
+        assert_eq!(projects[1].path, "/tmp/b");
+    }
+
+    #[test]
+    fn test_reorder_project_unknown_path_errors() {
+        // A typo or delete-during-drag race would call reorder_project with
+        // a path that no longer exists. Verify it surfaces a clean Err
+        // rather than silently no-op'ing or panicking.
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+
+        let result = db.reorder_project("/tmp/does-not-exist", 1);
+        assert!(matches!(result, Err(rusqlite::Error::QueryReturnedNoRows)));
+
+        // Existing project untouched.
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].sort_order, 1);
+    }
+
+    #[test]
+    fn test_migration_backfill_tiebreaker_uses_id() {
+        // SQLite stores `created_at` with second precision via datetime('now').
+        // Two projects inserted in the same second share a timestamp, so the
+        // backfill UPDATE must fall back to `id` to break the tie. This test
+        // forces the tie via raw UPDATE, resets sort_order to 0, re-runs the
+        // backfill, and verifies the result is deterministic by id.
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+        db.insert_project("c", "/tmp/c").unwrap();
+
+        // Force identical timestamps and clear sort_order so the backfill
+        // is the only thing assigning order.
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "UPDATE projects SET created_at = '2026-01-01 00:00:00', sort_order = 0",
+                [],
+            )
+            .unwrap();
+            conn.execute_batch(
+                "UPDATE projects SET sort_order = (
+                    SELECT COUNT(*) FROM projects p2
+                    WHERE p2.created_at < projects.created_at
+                       OR (p2.created_at = projects.created_at AND p2.id <= projects.id)
+                );",
+            )
+            .unwrap();
+        }
+
+        // With all timestamps tied, ordering must be by id ASC.
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 3);
+        assert_eq!(projects[0].path, "/tmp/a");
+        assert_eq!(projects[0].sort_order, 1);
+        assert_eq!(projects[1].path, "/tmp/b");
+        assert_eq!(projects[1].sort_order, 2);
+        assert_eq!(projects[2].path, "/tmp/c");
+        assert_eq!(projects[2].sort_order, 3);
     }
 
     #[test]

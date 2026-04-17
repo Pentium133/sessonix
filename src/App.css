@@ -97,6 +97,17 @@ body {
   background: var(--accent-muted);
 }
 
+.rail-project-btn.dragging {
+  opacity: 0.25;
+}
+
+.rail-project-btn.dragging-overlay {
+  border-color: var(--accent);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+  transform: scale(1.08);
+  cursor: grabbing;
+}
+
 .rail-project-letter {
   font-size: 13px;
   font-weight: 600;
