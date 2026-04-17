@@ -139,6 +139,10 @@ export const useProjectStore = create<ProjectState>()(
       return { projects: next };
     });
     if (backendOrder > 0) {
+      // Fire-and-forget: no UI rollback on failure (intentional, see SPEC-001
+      // "Out of Scope"). DB lock or missing-path errors self-heal on next
+      // restart since restore() reads order from the DB. Mirrors the existing
+      // reorderSession policy.
       apiReorderProject(fromPath, backendOrder).catch((e) => {
         console.error("[reorderProject] backend failed:", e);
       });

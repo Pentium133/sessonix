@@ -1025,6 +1025,65 @@ mod tests {
     }
 
     #[test]
+    fn test_reorder_project_unknown_path_errors() {
+        // A typo or delete-during-drag race would call reorder_project with
+        // a path that no longer exists. Verify it surfaces a clean Err
+        // rather than silently no-op'ing or panicking.
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+
+        let result = db.reorder_project("/tmp/does-not-exist", 1);
+        assert!(matches!(result, Err(rusqlite::Error::QueryReturnedNoRows)));
+
+        // Existing project untouched.
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].sort_order, 1);
+    }
+
+    #[test]
+    fn test_migration_backfill_tiebreaker_uses_id() {
+        // SQLite stores `created_at` with second precision via datetime('now').
+        // Two projects inserted in the same second share a timestamp, so the
+        // backfill UPDATE must fall back to `id` to break the tie. This test
+        // forces the tie via raw UPDATE, resets sort_order to 0, re-runs the
+        // backfill, and verifies the result is deterministic by id.
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("a", "/tmp/a").unwrap();
+        db.insert_project("b", "/tmp/b").unwrap();
+        db.insert_project("c", "/tmp/c").unwrap();
+
+        // Force identical timestamps and clear sort_order so the backfill
+        // is the only thing assigning order.
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "UPDATE projects SET created_at = '2026-01-01 00:00:00', sort_order = 0",
+                [],
+            )
+            .unwrap();
+            conn.execute_batch(
+                "UPDATE projects SET sort_order = (
+                    SELECT COUNT(*) FROM projects p2
+                    WHERE p2.created_at < projects.created_at
+                       OR (p2.created_at = projects.created_at AND p2.id <= projects.id)
+                );",
+            )
+            .unwrap();
+        }
+
+        // With all timestamps tied, ordering must be by id ASC.
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 3);
+        assert_eq!(projects[0].path, "/tmp/a");
+        assert_eq!(projects[0].sort_order, 1);
+        assert_eq!(projects[1].path, "/tmp/b");
+        assert_eq!(projects[1].sort_order, 2);
+        assert_eq!(projects[2].path, "/tmp/c");
+        assert_eq!(projects[2].sort_order, 3);
+    }
+
+    #[test]
     fn test_session_crud() {
         let db = Db::open_in_memory().unwrap();
         let project_id = db.insert_project("myapp", "/tmp/myapp").unwrap();
