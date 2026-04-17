@@ -101,6 +101,7 @@ impl AdapterRegistry {
         registry.register(Box::new(codex::CodexAdapter));
         registry.register(Box::new(gemini::GeminiAdapter));
         registry.register(Box::new(opencode::OpenCodeAdapter));
+        registry.register(Box::new(cursor::CursorAdapter));
         registry.register(Box::new(shell::ShellAdapter));
         // "shell" is a frontend alias for the same adapter as "custom"
         registry.adapters.insert("shell".to_string(), Box::new(shell::ShellAdapter));
@@ -143,10 +144,20 @@ mod tests {
         let registry = AdapterRegistry::new();
         assert!(registry.get("claude").is_some());
         assert!(registry.get("codex").is_some());
+        assert!(registry.get("cursor").is_some());
         assert!(registry.get("gemini").is_some());
         assert!(registry.get("opencode").is_some());
         assert!(registry.get("custom").is_some());
         assert!(registry.get("shell").is_some());
+    }
+
+    #[test]
+    fn test_registry_has_cursor() {
+        let registry = AdapterRegistry::new();
+        let adapter = registry.get("cursor").expect("cursor adapter missing");
+        assert_eq!(adapter.name(), "Cursor Agent");
+        assert_eq!(adapter.agent_type(), "cursor");
+        assert_eq!(adapter.cost_command(), None);
     }
 
     #[test]
@@ -162,9 +173,10 @@ mod tests {
     fn test_registry_available_types() {
         let registry = AdapterRegistry::new();
         let types = registry.available_types();
-        assert_eq!(types.len(), 6);
+        assert_eq!(types.len(), 7);
         assert!(types.contains(&"claude"));
         assert!(types.contains(&"codex"));
+        assert!(types.contains(&"cursor"));
         assert!(types.contains(&"gemini"));
         assert!(types.contains(&"opencode"));
         assert!(types.contains(&"custom"));
@@ -176,6 +188,7 @@ mod tests {
         let registry = AdapterRegistry::new();
         assert_eq!(registry.get("claude").unwrap().name(), "Claude Code");
         assert_eq!(registry.get("codex").unwrap().name(), "Codex CLI");
+        assert_eq!(registry.get("cursor").unwrap().name(), "Cursor Agent");
         assert_eq!(registry.get("gemini").unwrap().name(), "Gemini CLI");
         assert_eq!(registry.get("opencode").unwrap().name(), "OpenCode");
         assert_eq!(registry.get("custom").unwrap().name(), "Shell");
