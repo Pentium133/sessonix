@@ -48,7 +48,10 @@ export default function Sidebar() {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>({});
 
-  const projectGit = useGitStatus(activeProjectPath, { pollMs: 5_000 });
+  const projectGit = useGitStatus(activeProjectPath, {
+    pollMs: 5_000,
+    enabled: !sidebarCollapsed,
+  });
 
   useEffect(() => {
     if (activeProjectPath) loadTemplates(activeProjectPath);
