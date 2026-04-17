@@ -7,7 +7,7 @@ import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { getGitStatus } from "../lib/git";
 import { writeToSession } from "../lib/api";
-import { focusTerminal } from "./TerminalPane";
+import { focusTerminal } from "../lib/terminalPool";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
 import TemplateItem from "./TemplateItem";
