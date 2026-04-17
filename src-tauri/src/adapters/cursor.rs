@@ -36,6 +36,14 @@ impl AgentAdapter for CursorAdapter {
     }
 
     fn extract_status(&self, last_lines: &[String]) -> AgentStatus {
+        // Priority order matters:
+        //   1. error (case-insensitive)   — wins over action markers, so a line
+        //      like "Error reading config.rs" classifies as Error, not Reading.
+        //   2. Thinking / Planning        — agent state.
+        //   3. Reading / Writing / ...    — action markers; intentionally broad
+        //      until TASK-003 pins the real Cursor TUI output.
+        //   4. Idle prompts (> / $)       — last, so a shell prompt never
+        //      pre-empts a more specific signal on the same line.
         for line in last_lines.iter().rev() {
             let stripped = super::strip_ansi(line);
             let trimmed = stripped.trim();
@@ -44,6 +52,15 @@ impl AgentAdapter for CursorAdapter {
                 continue;
             }
 
+            // 1. Errors — case-insensitive so "ERROR"/"Error"/"error" all match.
+            if trimmed.to_ascii_lowercase().contains("error") {
+                return AgentStatus {
+                    state: SessionStatus::Error,
+                    status_line: super::truncate(trimmed, 80),
+                };
+            }
+
+            // 2. Agent state.
             if trimmed.contains("Thinking") || trimmed.contains("Planning") {
                 return AgentStatus {
                     state: SessionStatus::Running,
@@ -51,14 +68,10 @@ impl AgentAdapter for CursorAdapter {
                 };
             }
 
-            if trimmed.contains("Reading") {
-                return AgentStatus {
-                    state: SessionStatus::Running,
-                    status_line: trimmed.to_string(),
-                };
-            }
-
-            if trimmed.contains("Writing")
+            // 3. Action markers — broad substring match. Refine to `<verb> <path>`
+            //    once TASK-003 captures the exact TUI format.
+            if trimmed.contains("Reading")
+                || trimmed.contains("Writing")
                 || trimmed.contains("Editing")
                 || trimmed.contains("Applying")
             {
@@ -68,17 +81,11 @@ impl AgentAdapter for CursorAdapter {
                 };
             }
 
+            // 4. Idle shell prompt at line start.
             if trimmed.starts_with('>') || trimmed.starts_with('$') {
                 return AgentStatus {
                     state: SessionStatus::Idle,
                     status_line: "Waiting for input".to_string(),
-                };
-            }
-
-            if trimmed.contains("error") || trimmed.contains("Error") {
-                return AgentStatus {
-                    state: SessionStatus::Error,
-                    status_line: super::truncate(trimmed, 80),
                 };
             }
         }
@@ -294,5 +301,103 @@ mod tests {
         let lines = vec!["Thinking...".to_string(), "> ".to_string()];
         let status = adapter.extract_status(&lines);
         assert_eq!(status.state, SessionStatus::Idle);
+    }
+
+    // ---------- Phase 3: priority conflicts + robustness ----------
+
+    #[test]
+    fn test_extract_status_error_uppercase() {
+        // H4: case-insensitive match — "ERROR" must classify as Error.
+        let adapter = CursorAdapter;
+        let lines = vec!["ERROR: rate limit exceeded".to_string()];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Error);
+    }
+
+    #[test]
+    fn test_extract_status_error_wins_over_reading() {
+        // H2: "Error reading config.rs" must classify as Error, not Reading.
+        let adapter = CursorAdapter;
+        let lines = vec!["Error reading config.rs".to_string()];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Error);
+    }
+
+    #[test]
+    fn test_extract_status_error_wins_over_thinking() {
+        // H2: "Error: Thinking timed out" must classify as Error, not Thinking.
+        let adapter = CursorAdapter;
+        let lines = vec!["Error: Thinking timed out".to_string()];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Error);
+    }
+
+    #[test]
+    fn test_extract_status_truncates_long_error() {
+        // M2: long error lines are truncated to ≤80 chars.
+        let adapter = CursorAdapter;
+        let long_msg = format!("Error: {}", "x".repeat(200));
+        let lines = vec![long_msg];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Error);
+        assert!(
+            status.status_line.chars().count() <= 80,
+            "expected ≤80 chars, got {}",
+            status.status_line.chars().count()
+        );
+    }
+
+    #[test]
+    fn test_extract_status_truncates_long_error_utf8() {
+        // M2: truncation must not panic on multi-byte UTF-8 and must count chars.
+        let adapter = CursorAdapter;
+        let long_msg = format!("Error: {}", "ё".repeat(200));
+        let lines = vec![long_msg];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Error);
+        assert!(
+            status.status_line.chars().count() <= 80,
+            "expected ≤80 chars, got {}",
+            status.status_line.chars().count()
+        );
+    }
+
+    #[test]
+    fn test_extract_status_applying_wins_over_older_thinking() {
+        // M4: on multi-line output the newest (last) line wins — "Applying"
+        // must beat an older "Thinking..." state.
+        let adapter = CursorAdapter;
+        let lines = vec![
+            "Thinking...".to_string(),
+            "Applying patch to handler.go".to_string(),
+        ];
+        let status = adapter.extract_status(&lines);
+        assert_eq!(status.state, SessionStatus::Running);
+        assert!(status.status_line.contains("Applying"));
+    }
+
+    #[test]
+    fn test_extract_status_build_command_resume_with_prompt() {
+        // build_command passes prompt first, then extra_args — "--resume <id>"
+        // stays grouped together when supplied as extra_args alongside a prompt.
+        let adapter = CursorAdapter;
+        let config = LaunchConfig {
+            working_dir: "/tmp".to_string(),
+            prompt: Some("continue the task".to_string()),
+            extra_args: vec![
+                "--resume".to_string(),
+                "6ffd78e9-b552-49a7-9abf-2b00327c2764".to_string(),
+            ],
+        };
+        let (cmd, args, _) = adapter.build_command(&config);
+        assert_eq!(cmd, "agent");
+        assert_eq!(
+            args,
+            vec![
+                "continue the task",
+                "--resume",
+                "6ffd78e9-b552-49a7-9abf-2b00327c2764",
+            ]
+        );
     }
 }
