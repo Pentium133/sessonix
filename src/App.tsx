@@ -20,7 +20,7 @@ import type { AgentType } from "./lib/types";
 import { useSessionStore } from "./store/sessionStore";
 import { useProjectStore } from "./store/projectStore";
 import { useTaskStore } from "./store/taskStore";
-import { useUiStore } from "./store/uiStore";
+import { useUiStore, initUi } from "./store/uiStore";
 import { SIDEBAR_MIN, SIDEBAR_MAX } from "./lib/constants";
 import { getSetting, checkForUpdate } from "./lib/api";
 import type { UpdateInfo } from "./lib/api";
@@ -91,10 +91,12 @@ function App() {
     });
     useSettingsStore.getState().load();
     useSessionStore.getState().restore();
+    const cleanupUi = initUi();
     initNotifications();
     setupNotificationClickHandler();
     // Check for updates silently on startup
     triggerUpdateCheck(false);
+    return cleanupUi;
   }, [triggerUpdateCheck]);
 
   // Side effect hooks (no args needed — they read from stores)
