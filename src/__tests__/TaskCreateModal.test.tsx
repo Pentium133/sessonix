@@ -222,6 +222,32 @@ describe("TaskCreateModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("disables the main-checkout option and blocks Create if it is forced", async () => {
+    listBranchesMock.mockResolvedValueOnce([
+      { name: "main", worktree_path: "/repo", is_main: true, task_id: null },
+      { name: "feature/a", worktree_path: null, is_main: false, task_id: null },
+    ]);
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+
+    const select = (await screen.findByTestId(
+      "task-source-select"
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(3));
+
+    const mainOption = Array.from(select.options).find((o) => o.value === "main")!;
+    expect(mainOption.disabled).toBe(true);
+
+    // Even if a caller force-sets the value (bypassing the disabled attr),
+    // Create Task must stay disabled — the backend will refuse main too but
+    // we keep the UI consistent.
+    fireEvent.change(select, { target: { value: "main" } });
+    fireEvent.change(screen.getByPlaceholderText(/Task name/i), {
+      target: { value: "try to attach main" },
+    });
+    const btn = screen.getByText("Create Task") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
   it("disables Create Task when the picked branch already has a task", async () => {
     listBranchesMock.mockResolvedValueOnce([
       {
