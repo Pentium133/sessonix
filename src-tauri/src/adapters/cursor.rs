@@ -4,7 +4,7 @@
 //! strings are undocumented as of 2026-04. Patterns will be refined based on
 //! real output collected during TASK-003 (end-to-end verification).
 
-use crate::types::AgentStatus;
+use crate::types::{AgentStatus, SessionStatus};
 use super::{AgentAdapter, LaunchConfig};
 use std::collections::HashMap;
 
@@ -35,8 +35,58 @@ impl AgentAdapter for CursorAdapter {
         ("agent".to_string(), args, env)
     }
 
-    fn extract_status(&self, _last_lines: &[String]) -> AgentStatus {
-        todo!("Phase 2.GREEN")
+    fn extract_status(&self, last_lines: &[String]) -> AgentStatus {
+        for line in last_lines.iter().rev() {
+            let stripped = super::strip_ansi(line);
+            let trimmed = stripped.trim();
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if trimmed.contains("Thinking") || trimmed.contains("Planning") {
+                return AgentStatus {
+                    state: SessionStatus::Running,
+                    status_line: "Thinking...".to_string(),
+                };
+            }
+
+            if trimmed.contains("Reading") {
+                return AgentStatus {
+                    state: SessionStatus::Running,
+                    status_line: trimmed.to_string(),
+                };
+            }
+
+            if trimmed.contains("Writing")
+                || trimmed.contains("Editing")
+                || trimmed.contains("Applying")
+            {
+                return AgentStatus {
+                    state: SessionStatus::Running,
+                    status_line: trimmed.to_string(),
+                };
+            }
+
+            if trimmed.starts_with('>') || trimmed.starts_with('$') {
+                return AgentStatus {
+                    state: SessionStatus::Idle,
+                    status_line: "Waiting for input".to_string(),
+                };
+            }
+
+            if trimmed.contains("error") || trimmed.contains("Error") {
+                return AgentStatus {
+                    state: SessionStatus::Error,
+                    status_line: super::truncate(trimmed, 80),
+                };
+            }
+        }
+
+        AgentStatus {
+            state: SessionStatus::Running,
+            status_line: String::new(),
+        }
     }
 
     fn cost_command(&self) -> Option<&str> {
@@ -47,7 +97,6 @@ impl AgentAdapter for CursorAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SessionStatus;
 
     // ---------- Phase 1: identity + build_command ----------
 
