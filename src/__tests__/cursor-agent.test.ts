@@ -24,6 +24,8 @@ describe("Cursor launcher wiring", () => {
 });
 
 describe("buildAgentArgs(cursor)", () => {
+  // Cursor's builder ignores `skipPerms`; keep it on the base fixture only
+  // because `BuildArgsOptions` marks it required. It's never asserted on.
   const base = {
     agentType: "cursor" as const,
     skipPerms: false,
