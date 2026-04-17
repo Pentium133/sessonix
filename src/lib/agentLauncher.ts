@@ -15,6 +15,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
   { type: "gemini",   label: "gemini",   command: "gemini",   color: "var(--gemini)"   },
   { type: "codex",    label: "codex",    command: "codex",    color: "var(--codex)"    },
   { type: "opencode", label: "opencode", command: "opencode", color: "var(--opencode)" },
+  { type: "cursor",   label: "cursor",   command: "agent",    color: "var(--cursor)"   },
   { type: "custom",   label: "+",        command: "",         color: "var(--accent)"   },
 ];
 
@@ -52,6 +53,12 @@ export const AGENT_OPTIONS: Partial<Record<AgentType, AgentOptionsSpec>> = {
     modes: ["new", "last", "resume"],
     modeLabels: { last: "Last" },
     resumePlaceholder: "Session ID (ses_xxx)",
+  },
+  cursor: {
+    title: "Cursor Options",
+    radioName: "cursor-session-mode",
+    modes: ["new", "continue", "resume"],
+    resumePlaceholder: "Session ID (uuid)",
   },
 };
 
@@ -105,6 +112,15 @@ const builders: Partial<Record<AgentType, Builder>> = {
   },
 
   gemini: ({ prompt }) => (prompt ? [prompt] : []),
+
+  cursor: ({ mode, resumeSessionId, prompt }) => {
+    const args: string[] = [];
+    if (mode === "continue") args.push("--continue");
+    if (mode === "resume" && resumeSessionId) args.push("--resume", resumeSessionId);
+    // Positional prompt — the Cursor TUI picks it up as the initial message
+    if (prompt && mode === "new") args.push(prompt);
+    return args;
+  },
 };
 
 /** Build CLI args for launching an agent. shell/custom pass prompt via stdin, not args. */
