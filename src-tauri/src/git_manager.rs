@@ -71,6 +71,112 @@ pub struct WorktreeInfo {
     pub base_commit: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BranchInfo {
+    pub name: String,
+    /// Absolute path of the worktree where this branch is currently checked out.
+    /// `None` means the branch has no active checkout and is available for a new worktree.
+    pub worktree_path: Option<String>,
+    /// `true` when `worktree_path` points at the main repo workdir — such a branch
+    /// can't be attached as a task.
+    pub is_main: bool,
+}
+
+/// List local branches in the repo containing `working_dir`, annotated with where
+/// (if anywhere) each branch is currently checked out. `working_dir` may be the
+/// main workdir or any linked worktree — we always operate on the shared repo.
+pub fn list_branches(working_dir: &str) -> Result<Vec<BranchInfo>, String> {
+    let repo = Repository::discover(working_dir).map_err(|e| format!("Not a git repo: {}", e))?;
+
+    // Resolve the main workdir — works whether `working_dir` is the main
+    // checkout or any linked worktree. For a linked worktree, `repo.path()`
+    // returns `.git/worktrees/<name>/`; walking up three levels lands in the
+    // main repo root.
+    let main_workdir = if repo.is_worktree() {
+        repo.path()
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .ok_or("Cannot resolve main workdir from linked worktree")?
+            .to_path_buf()
+    } else {
+        repo.workdir()
+            .ok_or("Bare repository not supported")?
+            .to_path_buf()
+    };
+
+    let main_repo = Repository::open(&main_workdir)
+        .map_err(|e| format!("Failed to open main repo at {:?}: {}", main_workdir, e))?;
+
+    // Which branch (if any) is checked out in the main workdir right now.
+    let main_branch: Option<String> = main_repo.head().ok().and_then(|h| {
+        if h.is_branch() {
+            h.shorthand().map(String::from)
+        } else {
+            None
+        }
+    });
+
+    // Map: branch name → linked worktree path.
+    let mut linked: std::collections::HashMap<String, std::path::PathBuf> =
+        std::collections::HashMap::new();
+    if let Ok(worktrees) = main_repo.worktrees() {
+        for wt_name in worktrees.iter().flatten() {
+            let wt = match main_repo.find_worktree(wt_name) {
+                Ok(w) => w,
+                Err(_) => continue,
+            };
+            let wt_repo = match Repository::open_from_worktree(&wt) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            // Extract the branch name as an owned String before wt_repo is
+            // dropped so no Reference borrows outlive the iteration step.
+            let branch_name: Option<String> = wt_repo.head().ok().and_then(|h| {
+                if h.is_branch() {
+                    h.shorthand().map(String::from)
+                } else {
+                    None
+                }
+            });
+            if let Some(name) = branch_name {
+                linked.insert(name, wt.path().to_path_buf());
+            }
+        }
+    }
+
+    let branches = main_repo
+        .branches(Some(git2::BranchType::Local))
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+    let mut out = Vec::new();
+    for entry in branches {
+        let (branch, _) = match entry {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let name = match branch.name() {
+            Ok(Some(n)) => n.to_string(),
+            _ => continue,
+        };
+        let mut info = BranchInfo {
+            name: name.clone(),
+            worktree_path: None,
+            is_main: false,
+        };
+        if main_branch.as_deref() == Some(name.as_str()) {
+            info.worktree_path = Some(main_workdir.to_string_lossy().to_string());
+            info.is_main = true;
+        } else if let Some(path) = linked.get(&name) {
+            info.worktree_path = Some(path.to_string_lossy().to_string());
+        }
+        out.push(info);
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
 /// Sanitize a branch name: allow alphanumeric, dashes, underscores, slashes, dots.
 /// For filesystem paths (worktree dirs), slashes create subdirectories which is fine.
 /// Dots are allowed (git permits them in ref names) but `..` path components are
@@ -172,6 +278,101 @@ pub fn create_worktree(working_dir: &str, branch_name: &str) -> Result<WorktreeI
     Ok(WorktreeInfo {
         path: wt_dir.to_string_lossy().to_string(),
         branch: final_branch,
+        base_commit: base_sha,
+    })
+}
+
+/// Resolve the SHA of a branch tip without touching the filesystem.
+/// Used when attaching a Task row to an already-existing worktree — we still
+/// need a `base_commit` to store alongside the task.
+pub fn branch_head_sha(working_dir: &str, branch_name: &str) -> Result<String, String> {
+    let repo = Repository::discover(working_dir).map_err(|e| format!("Not a git repo: {}", e))?;
+    let ref_name = format!("refs/heads/{}", branch_name);
+    let reference = repo
+        .find_reference(&ref_name)
+        .map_err(|_| format!("Branch '{}' not found", branch_name))?;
+    let commit = reference
+        .peel_to_commit()
+        .map_err(|e| format!("Branch '{}' does not point to a commit: {}", branch_name, e))?;
+    Ok(format!("{}", commit.id()))
+}
+
+/// Create a worktree for an **existing** branch (no branch creation).
+/// The worktree directory is placed under `<repo_root>/.sessonix-worktrees/<sanitized>/`.
+/// Fails if `branch_name` doesn't exist locally or is already checked out elsewhere
+/// (git2 rejects double-checkout — we surface the error).
+pub fn create_worktree_from_branch(
+    working_dir: &str,
+    branch_name: &str,
+) -> Result<WorktreeInfo, String> {
+    let repo = Repository::discover(working_dir).map_err(|e| format!("Not a git repo: {}", e))?;
+    let repo_root = repo
+        .workdir()
+        .ok_or("Bare repository not supported")?
+        .to_path_buf();
+
+    // Resolve the existing branch ref and its tip commit.
+    let ref_name = format!("refs/heads/{}", branch_name);
+    let reference = repo
+        .find_reference(&ref_name)
+        .map_err(|_| format!("Branch '{}' not found", branch_name))?;
+    let head_commit = reference
+        .peel_to_commit()
+        .map_err(|e| format!("Branch '{}' does not point to a commit: {}", branch_name, e))?;
+    let base_sha = format!("{}", head_commit.id());
+
+    let sanitized = sanitize_branch(branch_name);
+    if sanitized.is_empty() {
+        return Err(format!(
+            "Branch name '{}' produces an empty sanitized name",
+            branch_name
+        ));
+    }
+    if !is_safe_worktree_name(&sanitized) {
+        return Err(format!(
+            "Branch name '{}' contains unsafe path components (. or ..)",
+            branch_name
+        ));
+    }
+
+    // Only the worktree directory name is deduplicated — the branch itself is
+    // kept as-is since we're attaching to it.
+    let base_name = sanitized.replace('/', "-");
+    let mut wt_name = base_name.clone();
+    let mut suffix = 2;
+    while repo_root.join(".sessonix-worktrees").join(&wt_name).exists() {
+        wt_name = format!("{}-{}", base_name, suffix);
+        suffix += 1;
+    }
+
+    let wt_dir = repo_root.join(".sessonix-worktrees").join(&wt_name);
+    std::fs::create_dir_all(wt_dir.parent().unwrap())
+        .map_err(|e| format!("Failed to create worktree dir: {}", e))?;
+
+    {
+        let mut opts = git2::WorktreeAddOptions::new();
+        opts.reference(Some(&reference));
+        repo.worktree(&wt_name, &wt_dir, Some(&opts))
+            .map_err(|e| format!("Failed to add worktree: {}", e))?;
+    }
+
+    let gitignore = repo_root.join(".gitignore");
+    if gitignore.exists() {
+        if let Ok(content) = std::fs::read_to_string(&gitignore) {
+            if !content.contains(".sessonix-worktrees") {
+                if let Err(e) = std::fs::write(
+                    &gitignore,
+                    format!("{}\n.sessonix-worktrees/\n", content.trim_end()),
+                ) {
+                    log::warn!("Could not update .gitignore: {}", e);
+                }
+            }
+        }
+    }
+
+    Ok(WorktreeInfo {
+        path: wt_dir.to_string_lossy().to_string(),
+        branch: branch_name.to_string(),
         base_commit: base_sha,
     })
 }
@@ -397,6 +598,132 @@ mod tests {
         let info = create_worktree(path, "feature/1.2.3").unwrap();
         assert!(!info.branch.is_empty());
         remove_worktree(&info.path).unwrap();
+    }
+
+    #[test]
+    fn test_list_branches_marks_main_and_linked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        // Extra branch without a worktree.
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("topic", &head, false).unwrap();
+        }
+
+        // Extra branch with a linked worktree.
+        let wt = create_worktree(path, "feature/linked").unwrap();
+
+        let branches = list_branches(path).unwrap();
+        let by_name: std::collections::HashMap<_, _> =
+            branches.iter().map(|b| (b.name.clone(), b)).collect();
+
+        // Main branch is named "main" or "master" depending on git defaults; look
+        // it up via get_git_status.
+        let status = get_git_status(path);
+        let main_name = status.branch.unwrap();
+        let main_info = by_name.get(&main_name).expect("main branch listed");
+        assert!(main_info.is_main);
+        assert!(main_info.worktree_path.is_some());
+
+        let topic = by_name.get("topic").expect("topic listed");
+        assert!(!topic.is_main);
+        assert!(topic.worktree_path.is_none());
+
+        let linked = by_name
+            .get("feature/linked")
+            .expect("linked branch listed");
+        assert!(!linked.is_main);
+        assert_eq!(linked.worktree_path.as_deref(), Some(wt.path.as_str()));
+
+        remove_worktree(&wt.path).unwrap();
+    }
+
+    #[test]
+    fn test_list_branches_from_inside_linked_worktree() {
+        // Ensure we still see all branches (including the main checkout) when
+        // `working_dir` is a linked worktree instead of the main workdir.
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        let wt = create_worktree(path, "feature/wt").unwrap();
+        let branches = list_branches(&wt.path).unwrap();
+
+        let status = get_git_status(path);
+        let main_name = status.branch.unwrap();
+        let by_name: std::collections::HashMap<_, _> =
+            branches.iter().map(|b| (b.name.clone(), b)).collect();
+        assert!(by_name.get(&main_name).unwrap().is_main);
+        assert_eq!(
+            by_name
+                .get("feature/wt")
+                .unwrap()
+                .worktree_path
+                .as_deref(),
+            Some(wt.path.as_str())
+        );
+
+        remove_worktree(&wt.path).unwrap();
+    }
+
+    #[test]
+    fn test_create_worktree_from_existing_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        // Create a branch without a worktree.
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("release/1.0", &head, false).unwrap();
+        }
+
+        let info = create_worktree_from_branch(path, "release/1.0").unwrap();
+        assert_eq!(info.branch, "release/1.0");
+        assert!(info.path.contains(".sessonix-worktrees"));
+        assert!(std::path::Path::new(&info.path).exists());
+        assert!(!info.base_commit.is_empty());
+
+        // Branch should now show up as linked in list_branches.
+        let branches = list_branches(path).unwrap();
+        let entry = branches
+            .iter()
+            .find(|b| b.name == "release/1.0")
+            .expect("branch listed");
+        assert_eq!(entry.worktree_path.as_deref(), Some(info.path.as_str()));
+
+        remove_worktree(&info.path).unwrap();
+    }
+
+    #[test]
+    fn test_create_worktree_from_branch_rejects_missing_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        let err = create_worktree_from_branch(tmp.path().to_str().unwrap(), "does-not-exist")
+            .expect_err("missing branch must fail");
+        assert!(err.contains("not found"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_create_worktree_from_branch_rejects_already_checked_out() {
+        // Attaching a new worktree to a branch that is already checked out in
+        // another linked worktree should fail — git2 refuses double-checkout.
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        let path = tmp.path().to_str().unwrap();
+
+        let wt = create_worktree(path, "feature/busy").unwrap();
+        let err = create_worktree_from_branch(path, "feature/busy")
+            .expect_err("branch is already in a worktree");
+        assert!(
+            err.to_lowercase().contains("worktree") || err.to_lowercase().contains("already"),
+            "unexpected error: {}",
+            err
+        );
+
+        remove_worktree(&wt.path).unwrap();
     }
 
     #[test]
