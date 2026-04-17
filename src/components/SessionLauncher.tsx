@@ -142,6 +142,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const taskNameRef = useRef<HTMLInputElement>(null);
   const folderPickerTriggered = useRef(false);
   const skipPermsAutoSet = useRef(false);
+  const launchingRef = useRef(false);
 
   const prefill = props.mode === "session" ? props.prefill : undefined;
   const taskId = props.mode === "session" ? props.taskId : undefined;
@@ -222,7 +223,6 @@ export default function SessionLauncher(props: SessionLauncherProps) {
 
   const projectName = props.projectPath.split("/").pop() ?? "";
 
-  const launchingRef = useRef(false);
   const handleLaunch = async () => {
     if (launchingRef.current) return;
     launchingRef.current = true;
