@@ -35,8 +35,9 @@ export function poolSize(): number {
   return pool.size;
 }
 
-export function poolEntries(): IterableIterator<[number, TerminalInstance]> {
-  return pool.entries();
+/** Snapshot of current pool entries; safe to mutate the pool mid-iteration. */
+export function poolEntries(): Array<[number, TerminalInstance]> {
+  return Array.from(pool.entries());
 }
 
 export function touchAccessOrder(sessionId: number): void {
