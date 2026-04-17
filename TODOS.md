@@ -4,7 +4,7 @@
 
 **What:** Move CLI arg construction from frontend `buildArgs()` (SessionLauncher.tsx:20) to backend `adapter.build_command()` (adapters/mod.rs:75).
 
-**Why:** Currently args are built in two places: frontend builds session mode + skip_permissions args, backend adapters have `build_command()` that is never called in production (only tests). This dual-location logic is confusing and will get worse as more launch options are added (prompt, templates, worktrees).
+**Why:** Currently args are built in two places: frontend builds session mode + skip_permissions args, backend adapters have `build_command()` that is never called in production (only tests). This dual-location logic is confusing and will get worse as more launch options are added (prompt, quick prompts, worktrees).
 
 **Pros:** Single source of truth for CLI arg construction. Adapters become the real authority on how to launch each agent. Frontend sends structured data (agent_type, session_mode, prompt, skip_permissions), backend builds everything.
 

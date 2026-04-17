@@ -188,9 +188,9 @@ export async function getAllSettings(): Promise<[string, string][]> {
   return invoke<[string, string][]>("get_all_settings");
 }
 
-// --- Templates ---
+// --- Quick prompts ---
 
-export interface TemplateInfo {
+export interface QuickPromptInfo {
   id: number;
   name: string;
   project_path: string;
@@ -199,26 +199,26 @@ export interface TemplateInfo {
   skip_permissions: boolean;
 }
 
-export async function createTemplate(request: {
+export async function createQuickPrompt(request: {
   name: string;
   project_path: string;
   agent: string;
   initial_prompt?: string;
   skip_permissions: boolean;
 }): Promise<number> {
-  return invoke<number>("create_template", { request });
+  return invoke<number>("create_quick_prompt", { request });
 }
 
-export async function listTemplates(projectPath: string): Promise<TemplateInfo[]> {
-  return invoke<TemplateInfo[]>("list_templates", { projectPath });
+export async function listQuickPrompts(projectPath: string): Promise<QuickPromptInfo[]> {
+  return invoke<QuickPromptInfo[]>("list_quick_prompts", { projectPath });
 }
 
-export async function deleteTemplate(id: number): Promise<void> {
-  return invoke<void>("delete_template", { id });
+export async function deleteQuickPrompt(id: number): Promise<void> {
+  return invoke<void>("delete_quick_prompt", { id });
 }
 
-export async function updateTemplate(id: number, name: string, initialPrompt?: string): Promise<void> {
-  return invoke<void>("update_template", { id, name, initialPrompt });
+export async function updateQuickPrompt(id: number, name: string, initialPrompt?: string): Promise<void> {
+  return invoke<void>("update_quick_prompt", { id, name, initialPrompt });
 }
 
 // --- Tasks (worktree-scoped session groups) ---

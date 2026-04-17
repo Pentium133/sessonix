@@ -27,7 +27,7 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   load: async (projectPath) => {
     // Reset before fetch — prevents stale flash when switching projects.
-    // Mirrors templateStore pattern.
+    // Mirrors quickPromptStore pattern.
     set({ tasks: [], loaded: false });
     try {
       const tasks = await listTasks(projectPath);

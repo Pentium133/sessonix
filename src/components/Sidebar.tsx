@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
-import { useTemplateStore } from "../store/templateStore";
+import { useQuickPromptStore } from "../store/quickPromptStore";
 import { useTaskStore } from "../store/taskStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
@@ -10,13 +10,13 @@ import { writeToSession } from "../lib/api";
 import { focusTerminal } from "./TerminalPane";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
-import TemplateItem from "./TemplateItem";
-import TemplateSaveModal from "./TemplateSaveModal";
+import QuickPromptItem from "./QuickPromptItem";
+import QuickPromptSaveModal from "./QuickPromptSaveModal";
 import TaskCreateModal from "./TaskCreateModal";
 import TaskGroup from "./TaskGroup";
 import WorktreeIcon from "./WorktreeIcon";
 import type { GitStatus, Session, Task } from "../lib/types";
-import type { TemplateInfo } from "../lib/api";
+import type { QuickPromptInfo } from "../lib/api";
 
 export default function Sidebar() {
   const projects = useProjectStore((s) => s.projects);
@@ -40,16 +40,16 @@ export default function Sidebar() {
 
   const { handleRemoveSession, handleRelaunchSession, handleForkSession } = useSessionActions();
 
-  const templates = useTemplateStore((s) => s.templates);
-  const loadTemplates = useTemplateStore((s) => s.load);
-  const addTemplate = useTemplateStore((s) => s.add);
-  const updateTemplate = useTemplateStore((s) => s.update);
-  const removeTemplate = useTemplateStore((s) => s.remove);
+  const quickPrompts = useQuickPromptStore((s) => s.quickPrompts);
+  const loadQuickPrompts = useQuickPromptStore((s) => s.load);
+  const addQuickPrompt = useQuickPromptStore((s) => s.add);
+  const updateQuickPrompt = useQuickPromptStore((s) => s.update);
+  const removeQuickPrompt = useQuickPromptStore((s) => s.remove);
 
   const tasks = useTaskStore((s) => s.tasks);
   const destroyTask = useTaskStore((s) => s.destroy);
 
-  const [templateModal, setTemplateModal] = useState<{ open: boolean; editing?: TemplateInfo }>({ open: false });
+  const [quickPromptModal, setQuickPromptModal] = useState<{ open: boolean; editing?: QuickPromptInfo }>({ open: false });
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>({});
 
@@ -66,8 +66,8 @@ export default function Sidebar() {
   }, [activeProjectPath]);
 
   useEffect(() => {
-    if (activeProjectPath) loadTemplates(activeProjectPath);
-  }, [activeProjectPath, loadTemplates]);
+    if (activeProjectPath) loadQuickPrompts(activeProjectPath);
+  }, [activeProjectPath, loadQuickPrompts]);
 
   const activeProject = projects.find((p) => p.path === activeProjectPath);
   const projectSessions = sessions
@@ -361,13 +361,13 @@ export default function Sidebar() {
           </>
         )}
       </div>
-      <div className="sidebar-templates">
-        <div className="sidebar-templates-header">
-          <span>Templates</span>
+      <div className="sidebar-quick-prompts">
+        <div className="sidebar-quick-prompts-header">
+          <span>Quick Prompts</span>
           <button
             className="new-btn"
-            onClick={() => setTemplateModal({ open: true })}
-            title="New template"
+            onClick={() => setQuickPromptModal({ open: true })}
+            title="New quick prompt"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <line x1="6" y1="1" x2="6" y2="11" />
@@ -375,15 +375,15 @@ export default function Sidebar() {
             </svg>
           </button>
         </div>
-        {templates.length === 0 ? (
-          <div className="sidebar-templates-empty">
-            No templates yet
+        {quickPrompts.length === 0 ? (
+          <div className="sidebar-quick-prompts-empty">
+            No quick prompts yet
           </div>
         ) : (
-          templates.map((t) => (
-            <TemplateItem
+          quickPrompts.map((t) => (
+            <QuickPromptItem
               key={t.id}
-              template={t}
+              quickPrompt={t}
               onRun={() => {
                 const sid = activeSessionId;
                 if (sid == null) {
@@ -392,7 +392,7 @@ export default function Sidebar() {
                 }
                 const text = t.initial_prompt ?? "";
                 if (!text) {
-                  showToast("Template has no prompt", "error");
+                  showToast("Quick prompt is empty", "error");
                   return;
                 }
                 const encoder = new TextEncoder();
@@ -400,9 +400,9 @@ export default function Sidebar() {
                   .then(() => focusTerminal(sid))
                   .catch((err) => showToast(String(err), "error"));
               }}
-              onEdit={() => setTemplateModal({ open: true, editing: t })}
+              onEdit={() => setQuickPromptModal({ open: true, editing: t })}
               onDelete={() => {
-                removeTemplate(t.id).catch((err) => showToast(String(err), "error"));
+                removeQuickPrompt(t.id).catch((err) => showToast(String(err), "error"));
               }}
             />
           ))
@@ -414,23 +414,23 @@ export default function Sidebar() {
           onClose={() => setTaskModalOpen(false)}
         />
       )}
-      {templateModal.open && (
-        <TemplateSaveModal
-          title={templateModal.editing ? "Edit Template" : "New Template"}
-          initialName={templateModal.editing?.name}
-          initialPrompt={templateModal.editing?.initial_prompt ?? undefined}
-          onClose={() => setTemplateModal({ open: false })}
+      {quickPromptModal.open && (
+        <QuickPromptSaveModal
+          title={quickPromptModal.editing ? "Edit Quick Prompt" : "New Quick Prompt"}
+          initialName={quickPromptModal.editing?.name}
+          initialPrompt={quickPromptModal.editing?.initial_prompt ?? undefined}
+          onClose={() => setQuickPromptModal({ open: false })}
           onSave={async (name, prompt) => {
             if (!activeProjectPath) return;
             try {
-              if (templateModal.editing) {
-                await updateTemplate(templateModal.editing.id, name, prompt);
-                showToast(`Template "${name}" updated`, "success");
+              if (quickPromptModal.editing) {
+                await updateQuickPrompt(quickPromptModal.editing.id, name, prompt);
+                showToast(`Quick prompt "${name}" updated`, "success");
               } else {
-                await addTemplate({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
-                showToast(`Template "${name}" saved`, "success");
+                await addQuickPrompt({ name, project_path: activeProjectPath, agent: "", initial_prompt: prompt, skip_permissions: false });
+                showToast(`Quick prompt "${name}" saved`, "success");
               }
-              setTemplateModal({ open: false });
+              setQuickPromptModal({ open: false });
             } catch (err) {
               showToast(String(err), "error");
             }

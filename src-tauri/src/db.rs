@@ -71,7 +71,7 @@ pub struct TaskRow {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct TemplateRow {
+pub struct QuickPromptRow {
     pub id: i64,
     pub name: String,
     pub project_path: String,
@@ -198,9 +198,21 @@ impl Db {
             )?;
         }
 
-        // Templates table
+        // Migration: rename legacy `templates` table → `quick_prompts`.
+        // Runs before the CREATE below so the empty new table doesn't block the rename.
+        let has_legacy_templates: bool = conn
+            .prepare("SELECT 1 FROM templates LIMIT 0")
+            .is_ok();
+        let has_quick_prompts: bool = conn
+            .prepare("SELECT 1 FROM quick_prompts LIMIT 0")
+            .is_ok();
+        if has_legacy_templates && !has_quick_prompts {
+            conn.execute_batch("ALTER TABLE templates RENAME TO quick_prompts;")?;
+        }
+
+        // Quick prompts table
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS templates (
+            "CREATE TABLE IF NOT EXISTS quick_prompts (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 name            TEXT NOT NULL,
                 project_path    TEXT NOT NULL,
@@ -302,7 +314,7 @@ impl Db {
             "DELETE FROM tasks WHERE project_id = (SELECT id FROM projects WHERE path = ?1)",
             params![path],
         )?;
-        tx.execute("DELETE FROM templates WHERE project_path = ?1", params![path])?;
+        tx.execute("DELETE FROM quick_prompts WHERE project_path = ?1", params![path])?;
         tx.execute("DELETE FROM projects WHERE path = ?1", params![path])?;
         tx.commit()?;
         Ok(())
@@ -675,9 +687,9 @@ impl Db {
         Ok(())
     }
 
-    // --- Templates ---
+    // --- Quick prompts ---
 
-    pub fn insert_template(
+    pub fn insert_quick_prompt(
         &self,
         name: &str,
         project_path: &str,
@@ -687,22 +699,22 @@ impl Db {
     ) -> Result<i64, rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO templates (name, project_path, agent, initial_prompt, skip_permissions)
+            "INSERT INTO quick_prompts (name, project_path, agent, initial_prompt, skip_permissions)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![name, project_path, agent, initial_prompt, skip_permissions as i32],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
-    pub fn list_templates(&self, project_path: &str) -> Result<Vec<TemplateRow>, rusqlite::Error> {
+    pub fn list_quick_prompts(&self, project_path: &str) -> Result<Vec<QuickPromptRow>, rusqlite::Error> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, name, project_path, agent, initial_prompt, skip_permissions, created_at
-             FROM templates WHERE project_path = ?1 ORDER BY name ASC",
+             FROM quick_prompts WHERE project_path = ?1 ORDER BY name ASC",
         )?;
         let rows = stmt
             .query_map(params![project_path], |row| {
-                Ok(TemplateRow {
+                Ok(QuickPromptRow {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     project_path: row.get(2)?,
@@ -716,13 +728,13 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn delete_template(&self, id: i64) -> Result<(), rusqlite::Error> {
+    pub fn delete_quick_prompt(&self, id: i64) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
-        conn.execute("DELETE FROM templates WHERE id = ?1", params![id])?;
+        conn.execute("DELETE FROM quick_prompts WHERE id = ?1", params![id])?;
         Ok(())
     }
 
-    pub fn update_template(
+    pub fn update_quick_prompt(
         &self,
         id: i64,
         name: &str,
@@ -732,7 +744,7 @@ impl Db {
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute(
-            "UPDATE templates SET name = ?1, agent = ?2, initial_prompt = ?3, skip_permissions = ?4 WHERE id = ?5",
+            "UPDATE quick_prompts SET name = ?1, agent = ?2, initial_prompt = ?3, skip_permissions = ?4 WHERE id = ?5",
             params![name, agent, initial_prompt, skip_permissions as i32, id],
         )?;
         Ok(())

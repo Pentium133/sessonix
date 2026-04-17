@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 // Mock API before importing stores — invoke returns undefined by default,
-// which breaks async load() calls in templateStore/taskStore on render.
+// which breaks async load() calls in quickPromptStore/taskStore on render.
 vi.mock("../lib/api", () => ({
   writeToSession: vi.fn().mockResolvedValue(undefined),
   createSession: vi.fn().mockResolvedValue(100),
@@ -12,10 +12,10 @@ vi.mock("../lib/api", () => ({
   detachSession: vi.fn().mockResolvedValue(undefined),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
-  listTemplates: vi.fn().mockResolvedValue([]),
-  createTemplate: vi.fn().mockResolvedValue(1),
-  deleteTemplate: vi.fn().mockResolvedValue(undefined),
-  updateTemplate: vi.fn().mockResolvedValue(undefined),
+  listQuickPrompts: vi.fn().mockResolvedValue([]),
+  createQuickPrompt: vi.fn().mockResolvedValue(1),
+  deleteQuickPrompt: vi.fn().mockResolvedValue(undefined),
+  updateQuickPrompt: vi.fn().mockResolvedValue(undefined),
   listTasks: vi.fn().mockResolvedValue([]),
   createTask: vi.fn().mockResolvedValue({
     id: 1, projectId: 1, name: "t", branch: null, worktreePath: null, baseCommit: null, createdAt: 0,
