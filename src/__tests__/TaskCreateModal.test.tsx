@@ -3,10 +3,13 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const createTaskMock = vi.fn();
 
+const listBranchesMock = vi.fn().mockResolvedValue([]);
+
 vi.mock("../lib/api", () => ({
   createTask: (...args: unknown[]) => createTaskMock(...args),
   listTasks: vi.fn().mockResolvedValue([]),
   deleteTask: vi.fn().mockResolvedValue({ worktree_warning: null }),
+  listBranches: (...args: unknown[]) => listBranchesMock(...args),
 }));
 
 vi.mock("../components/Toast", () => ({
@@ -20,6 +23,8 @@ import { showToast } from "../components/Toast";
 describe("TaskCreateModal", () => {
   beforeEach(() => {
     createTaskMock.mockReset();
+    listBranchesMock.mockReset();
+    listBranchesMock.mockResolvedValue([]);
     vi.mocked(showToast).mockClear();
     useTaskStore.setState({ tasks: [], loaded: true });
   });
@@ -148,6 +153,101 @@ describe("TaskCreateModal", () => {
     // Auto-fill resumes
     fireEvent.change(nameInput, { target: { value: "Second task" } });
     expect(branchInput.value).toBe("feat/second-task");
+  });
+
+  it("populates the source dropdown with branches loaded from the backend", async () => {
+    listBranchesMock.mockResolvedValueOnce([
+      { name: "main", worktree_path: "/repo", is_main: true, task_id: null },
+      { name: "feature/a", worktree_path: null, is_main: false, task_id: null },
+      {
+        name: "feature/taken",
+        worktree_path: "/repo/.sessonix-worktrees/feature-taken",
+        is_main: false,
+        task_id: 42,
+      },
+    ]);
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+
+    const select = (await screen.findByTestId(
+      "task-source-select"
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      // 1 sentinel + 3 branches
+      expect(select.options).toHaveLength(4);
+    });
+    const texts = Array.from(select.options).map((o) => o.text);
+    expect(texts[0]).toMatch(/create new branch/);
+    expect(texts.some((t) => t.includes("feature/a"))).toBe(true);
+    expect(texts.some((t) => t.includes("feature/taken"))).toBe(true);
+    // main is rendered as disabled, not hidden.
+    const mainOption = Array.from(select.options).find((o) => o.value === "main")!;
+    expect(mainOption.disabled).toBe(true);
+  });
+
+  it("submits with source_branch when attaching to an existing branch", async () => {
+    listBranchesMock.mockResolvedValueOnce([
+      { name: "feature/hotfix", worktree_path: null, is_main: false, task_id: null },
+    ]);
+    createTaskMock.mockResolvedValueOnce({
+      id: 5,
+      projectId: 1,
+      name: "feature/hotfix",
+      branch: "feature/hotfix",
+      worktreePath: "/repo/.sessonix-worktrees/feature-hotfix",
+      baseCommit: "deadbeef",
+      createdAt: 0,
+    });
+    const onClose = vi.fn();
+    render(<TaskCreateModal projectPath="/repo" onClose={onClose} />);
+
+    const select = (await screen.findByTestId(
+      "task-source-select"
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    fireEvent.change(select, { target: { value: "feature/hotfix" } });
+
+    // Branch input disappears once an existing branch is picked.
+    expect(screen.queryByPlaceholderText("feat/my-task")).toBeNull();
+
+    fireEvent.click(screen.getByText("Create Task"));
+
+    await waitFor(() =>
+      expect(createTaskMock).toHaveBeenCalledWith({
+        project_path: "/repo",
+        name: "feature/hotfix",
+        branch_name: "",
+        source_branch: "feature/hotfix",
+      })
+    );
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("disables Create Task when the picked branch already has a task", async () => {
+    listBranchesMock.mockResolvedValueOnce([
+      {
+        name: "feature/taken",
+        worktree_path: "/repo/.sessonix-worktrees/feature-taken",
+        is_main: false,
+        task_id: 7,
+      },
+    ]);
+    render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
+
+    const select = (await screen.findByTestId(
+      "task-source-select"
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(select.options).toHaveLength(2));
+    fireEvent.change(select, { target: { value: "feature/taken" } });
+
+    // Even with a valid task name, create must be blocked.
+    fireEvent.change(screen.getByPlaceholderText(/Task name/i), {
+      target: { value: "won't create" },
+    });
+    const btn = screen.getByText("Create Task") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(screen.getByTestId("source-branch-hint").textContent).toMatch(
+      /task already uses/i
+    );
   });
 
   it("shows error toast and keeps modal open on createTask rejection", async () => {

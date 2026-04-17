@@ -723,6 +723,33 @@ impl Db {
         }
     }
 
+    /// Fetch a task by the worktree path it owns. Returns None if no task matches.
+    /// Used by list_branches to annotate which worktrees already belong to a task,
+    /// and by create_task to guard against attaching two tasks to the same worktree.
+    pub fn find_task_by_worktree_path(
+        &self,
+        worktree_path: &str,
+    ) -> Result<Option<TaskRow>, rusqlite::Error> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, project_id, name, branch, worktree_path, base_commit, created_at
+             FROM tasks WHERE worktree_path = ?1",
+        )?;
+        let mut rows = stmt.query(params![worktree_path])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(TaskRow {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                name: row.get(2)?,
+                branch: row.get(3)?,
+                worktree_path: row.get(4)?,
+                base_commit: row.get(5)?,
+                created_at: row.get(6)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
     /// List all sessions belonging to a task (any status). Needed for kill cascade on delete_task.
     pub fn list_sessions_by_task_id(
         &self,

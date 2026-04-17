@@ -256,6 +256,8 @@ export async function createTask(request: {
   project_path: string;
   name: string;
   branch_name: string;
+  /** When set, attach the task to this existing branch instead of creating a new one. */
+  source_branch?: string;
 }): Promise<Task> {
   const info = await invoke<TaskInfo>("create_task", { request });
   return mapTaskInfo(info);
@@ -264,6 +266,20 @@ export async function createTask(request: {
 export async function listTasks(projectPath: string): Promise<Task[]> {
   const infos = await invoke<TaskInfo[]>("list_tasks", { projectPath });
   return infos.map(mapTaskInfo);
+}
+
+export interface BranchListItem {
+  name: string;
+  /** Absolute path of the worktree where this branch is currently checked out. */
+  worktree_path: string | null;
+  /** True when the branch is the main checkout — can't be attached as a task. */
+  is_main: boolean;
+  /** Set when an existing Task row already owns `worktree_path`. */
+  task_id: number | null;
+}
+
+export async function listBranches(workingDir: string): Promise<BranchListItem[]> {
+  return invoke<BranchListItem[]>("list_branches", { workingDir });
 }
 
 export interface DeleteTaskResult {

@@ -14,7 +14,8 @@ interface TaskState {
   create: (
     projectPath: string,
     name: string,
-    branchName: string
+    branchName: string,
+    sourceBranch?: string
   ) => Promise<Task>;
   /// Returns a non-null string when the task was removed from DB but the
   /// worktree cleanup failed (caller should surface as a warning toast).
@@ -38,12 +39,24 @@ export const useTaskStore = create<TaskState>((set) => ({
     }
   },
 
-  create: async (projectPath, name, branchName) => {
-    const task = await apiCreate({
-      project_path: projectPath,
-      name,
-      branch_name: branchName,
-    });
+  create: async (projectPath, name, branchName, sourceBranch) => {
+    // Omit `source_branch` entirely when not set — keeps the payload identical
+    // to the pre-dropdown shape so tests and the backend both see the legacy
+    // 3-field request for new-branch creation.
+    const task = await apiCreate(
+      sourceBranch
+        ? {
+            project_path: projectPath,
+            name,
+            branch_name: branchName,
+            source_branch: sourceBranch,
+          }
+        : {
+            project_path: projectPath,
+            name,
+            branch_name: branchName,
+          }
+    );
     set((s) => ({ tasks: [...s.tasks, task] }));
     return task;
   },

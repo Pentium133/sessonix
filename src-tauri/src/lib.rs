@@ -449,7 +449,23 @@ fn update_quick_prompt(state: tauri::State<'_, SessionManager>, id: i64, name: S
 struct CreateTaskRequest {
     project_path: String,
     name: String,
+    /// Name of a new branch to create from HEAD. Ignored when `source_branch` is set.
     branch_name: String,
+    /// When `Some`, the task attaches to an existing local branch instead of creating
+    /// a new one. If that branch already lives in a worktree, the task points at it;
+    /// otherwise a new worktree is created on top of the existing branch.
+    #[serde(default)]
+    source_branch: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct BranchListItem {
+    name: String,
+    worktree_path: Option<String>,
+    is_main: bool,
+    /// Set when a task row already exists for `worktree_path` — the UI uses this
+    /// to label the branch as "task exists" and skip create_task entirely.
+    task_id: Option<i64>,
 }
 
 #[derive(serde::Serialize)]
@@ -525,22 +541,43 @@ const TASK_FIELD_MAX_LEN: usize = 200;
 /// Trim + length/empty validation for a task creation request.
 /// Pure, side-effect free — extracted so it can be exercised in unit tests
 /// without the full Tauri State + DB setup.
-fn validate_task_fields(name: &str, branch_name: &str) -> Result<(String, String), String> {
+///
+/// When `source_branch` is `Some`, `branch_name` is treated as optional — the
+/// task will attach to the pre-existing branch instead of creating a new one.
+/// When `source_branch` is `None`, `branch_name` is required (current path).
+fn validate_task_fields(
+    name: &str,
+    branch_name: &str,
+    source_branch: Option<&str>,
+) -> Result<(String, String, Option<String>), String> {
     let name = name.trim().to_string();
     let branch_name = branch_name.trim().to_string();
+    let source_branch = source_branch.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+
     if name.is_empty() {
         return Err("Task name is required".into());
-    }
-    if branch_name.is_empty() {
-        return Err("Branch name is required".into());
     }
     if name.len() > TASK_FIELD_MAX_LEN {
         return Err(format!("Task name must be ≤{} characters", TASK_FIELD_MAX_LEN));
     }
-    if branch_name.len() > TASK_FIELD_MAX_LEN {
-        return Err(format!("Branch name must be ≤{} characters", TASK_FIELD_MAX_LEN));
+
+    if let Some(ref sb) = source_branch {
+        if sb.len() > TASK_FIELD_MAX_LEN {
+            return Err(format!(
+                "Source branch must be ≤{} characters",
+                TASK_FIELD_MAX_LEN
+            ));
+        }
+    } else {
+        if branch_name.is_empty() {
+            return Err("Branch name is required".into());
+        }
+        if branch_name.len() > TASK_FIELD_MAX_LEN {
+            return Err(format!("Branch name must be ≤{} characters", TASK_FIELD_MAX_LEN));
+        }
     }
-    Ok((name, branch_name))
+
+    Ok((name, branch_name, source_branch))
 }
 
 #[tauri::command]
@@ -548,35 +585,43 @@ async fn create_task(
     state: tauri::State<'_, SessionManager>,
     request: CreateTaskRequest,
 ) -> Result<TaskInfo, String> {
-    // Early input validation — reject empty or absurdly long fields before
-    // any filesystem or DB work.
-    let (name, branch_name) = validate_task_fields(&request.name, &request.branch_name)?;
+    let (name, branch_name, source_branch) =
+        validate_task_fields(&request.name, &request.branch_name, request.source_branch.as_deref())?;
 
-    // Project must already exist (added via add_project). Lookup id first.
     let project_id = state
         .db
         .find_project_id_by_path(&request.project_path)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Unknown project path: {}", request.project_path))?;
 
-    // Offload blocking git2 + DB work so the Tauri dispatcher thread stays free.
     let db = state.db.clone();
     let project_path = request.project_path;
 
     tauri::async_runtime::spawn_blocking(move || -> Result<TaskInfo, String> {
-        let wt = git_manager::create_worktree(&project_path, &branch_name)?;
+        // `created_worktree` is Some only when we created the worktree inside
+        // this call — used to compensate on DB failure. Attaching to a
+        // pre-existing worktree leaves it untouched on rollback.
+        let (wt_branch, wt_path, wt_base, created_worktree): (String, String, String, bool) =
+            match source_branch.as_deref() {
+                Some(sb) => attach_source_branch(&db, &project_path, sb)?,
+                None => {
+                    let wt = git_manager::create_worktree(&project_path, &branch_name)?;
+                    (wt.branch, wt.path, wt.base_commit, true)
+                }
+            };
 
-        // On DB failure, compensate by removing the worktree we just created.
         let task_id = match db.insert_task(
             project_id,
             &name,
-            Some(&wt.branch),
-            Some(&wt.path),
-            Some(&wt.base_commit),
+            Some(&wt_branch),
+            Some(&wt_path),
+            Some(&wt_base),
         ) {
             Ok(id) => id,
             Err(e) => {
-                let _ = git_manager::remove_worktree(&wt.path);
+                if created_worktree {
+                    let _ = git_manager::remove_worktree(&wt_path);
+                }
                 return Err(format!("Failed to persist task: {}", e));
             }
         };
@@ -589,14 +634,55 @@ async fn create_task(
             id: task_id,
             project_id,
             name,
-            branch: Some(wt.branch),
-            worktree_path: Some(wt.path),
-            base_commit: Some(wt.base_commit),
+            branch: Some(wt_branch),
+            worktree_path: Some(wt_path),
+            base_commit: Some(wt_base),
             created_at,
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Resolve a `source_branch` to `(branch, worktree_path, base_commit, created_worktree)`:
+/// - if the branch is already checked out in a linked worktree, reuse its path
+///   and refuse if a task is already attached to it;
+/// - if it has no worktree, create one via `create_worktree_from_branch`;
+/// - refuse to attach to the main checkout (that's the project root itself).
+fn attach_source_branch(
+    db: &std::sync::Arc<db::Db>,
+    project_path: &str,
+    source_branch: &str,
+) -> Result<(String, String, String, bool), String> {
+    let branches = git_manager::list_branches(project_path)?;
+    let entry = branches
+        .iter()
+        .find(|b| b.name == source_branch)
+        .ok_or_else(|| format!("Branch '{}' not found", source_branch))?;
+
+    if entry.is_main {
+        return Err(format!(
+            "Branch '{}' is the main checkout — pick a different branch",
+            source_branch
+        ));
+    }
+
+    if let Some(existing_path) = entry.worktree_path.clone() {
+        if let Some(existing_task) = db
+            .find_task_by_worktree_path(&existing_path)
+            .map_err(|e| e.to_string())?
+        {
+            return Err(format!(
+                "Task '{}' already exists for branch '{}'",
+                existing_task.name, source_branch
+            ));
+        }
+        let base = git_manager::branch_head_sha(project_path, source_branch)?;
+        Ok((source_branch.to_string(), existing_path, base, false))
+    } else {
+        let wt = git_manager::create_worktree_from_branch(project_path, source_branch)?;
+        Ok((wt.branch, wt.path, wt.base_commit, true))
+    }
 }
 
 #[tauri::command]
@@ -726,6 +812,38 @@ async fn create_worktree(working_dir: String, branch_name: String) -> Result<git
 async fn remove_worktree(worktree_path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_manager::remove_worktree(&worktree_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_branches(
+    state: tauri::State<'_, SessionManager>,
+    working_dir: String,
+) -> Result<Vec<BranchListItem>, String> {
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<BranchListItem>, String> {
+        let branches = git_manager::list_branches(&working_dir)?;
+        Ok(branches
+            .into_iter()
+            .map(|b| {
+                // Look up whether an existing task already owns this worktree.
+                // A DB error here degrades gracefully: we still return the
+                // branch, just without the task_id annotation.
+                let task_id = b
+                    .worktree_path
+                    .as_deref()
+                    .and_then(|p| db.find_task_by_worktree_path(p).ok().flatten())
+                    .map(|t| t.id);
+                BranchListItem {
+                    name: b.name,
+                    worktree_path: b.worktree_path,
+                    is_main: b.is_main,
+                    task_id,
+                }
+            })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -911,41 +1029,117 @@ mod task_validation_tests {
 
     #[test]
     fn accepts_trimmed_nonempty_fields() {
-        let (n, b) = validate_task_fields("  fix auth  ", "  feat/auth  ").unwrap();
+        let (n, b, s) = validate_task_fields("  fix auth  ", "  feat/auth  ", None).unwrap();
         assert_eq!(n, "fix auth");
         assert_eq!(b, "feat/auth");
+        assert!(s.is_none());
     }
 
     #[test]
     fn rejects_empty_name() {
-        assert!(validate_task_fields("", "feat/x").is_err());
-        assert!(validate_task_fields("   ", "feat/x").is_err());
+        assert!(validate_task_fields("", "feat/x", None).is_err());
+        assert!(validate_task_fields("   ", "feat/x", None).is_err());
     }
 
     #[test]
     fn rejects_empty_branch() {
-        assert!(validate_task_fields("name", "").is_err());
-        assert!(validate_task_fields("name", "   ").is_err());
+        assert!(validate_task_fields("name", "", None).is_err());
+        assert!(validate_task_fields("name", "   ", None).is_err());
     }
 
     #[test]
     fn rejects_name_too_long() {
         let too_long = "a".repeat(TASK_FIELD_MAX_LEN + 1);
-        assert!(validate_task_fields(&too_long, "feat/x").is_err());
+        assert!(validate_task_fields(&too_long, "feat/x", None).is_err());
     }
 
     #[test]
     fn rejects_branch_too_long() {
         let too_long = "x".repeat(TASK_FIELD_MAX_LEN + 1);
-        assert!(validate_task_fields("name", &too_long).is_err());
+        assert!(validate_task_fields("name", &too_long, None).is_err());
     }
 
     #[test]
     fn accepts_fields_at_max_length() {
         let at_max = "b".repeat(TASK_FIELD_MAX_LEN);
-        let (n, b) = validate_task_fields(&at_max, &at_max).unwrap();
+        let (n, b, _) = validate_task_fields(&at_max, &at_max, None).unwrap();
         assert_eq!(n.len(), TASK_FIELD_MAX_LEN);
         assert_eq!(b.len(), TASK_FIELD_MAX_LEN);
+    }
+
+    #[test]
+    fn source_branch_makes_branch_name_optional() {
+        // With source_branch, an empty/missing branch_name is allowed — we're
+        // attaching to an existing branch, not creating a new one.
+        let (n, _, s) =
+            validate_task_fields("attach", "", Some("  existing/branch  ")).unwrap();
+        assert_eq!(n, "attach");
+        assert_eq!(s.as_deref(), Some("existing/branch"));
+    }
+
+    #[test]
+    fn source_branch_blank_falls_back_to_branch_name_requirement() {
+        // A whitespace-only source_branch is treated as missing, so the regular
+        // branch_name rules kick back in.
+        assert!(validate_task_fields("name", "", Some("   ")).is_err());
+    }
+
+    #[test]
+    fn rejects_source_branch_too_long() {
+        let too_long = "x".repeat(TASK_FIELD_MAX_LEN + 1);
+        assert!(validate_task_fields("name", "", Some(&too_long)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod attach_source_branch_tests {
+    use super::attach_source_branch;
+    use crate::{db::Db, git_manager};
+    use std::sync::Arc;
+
+    fn init_repo(path: &std::path::Path) {
+        let repo = git2::Repository::init(path).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+    }
+
+    /// The critical guard: a branch whose worktree already belongs to another
+    /// task must be rejected, otherwise two tasks could end up owning the same
+    /// worktree path and `delete_task` on either would pull the rug from under
+    /// the other.
+    #[test]
+    fn rejects_branch_already_claimed_by_a_task() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let project_path = tmp.path().to_str().unwrap();
+
+        // Produce a branch+linked worktree pair so list_branches reports it.
+        let wt = git_manager::create_worktree(project_path, "feature/claimed").unwrap();
+
+        // In-memory DB with a task row pointing at that worktree.
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        let project_id = db.insert_project("test", project_path).unwrap();
+        db.insert_task(
+            project_id,
+            "existing task",
+            Some(&wt.branch),
+            Some(&wt.path),
+            Some(&wt.base_commit),
+        )
+        .unwrap();
+
+        let err = attach_source_branch(&db, project_path, "feature/claimed")
+            .expect_err("must reject — a task already owns this branch's worktree");
+        assert!(
+            err.contains("already exists"),
+            "unexpected error text: {}",
+            err
+        );
+
+        git_manager::remove_worktree(&wt.path).unwrap();
     }
 }
 
@@ -1122,6 +1316,7 @@ pub fn run() {
             get_git_status,
             create_worktree,
             remove_worktree,
+            list_branches,
             clear_worktree_path,
             check_for_update,
             create_quick_prompt,
