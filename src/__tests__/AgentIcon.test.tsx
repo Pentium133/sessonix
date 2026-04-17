@@ -34,4 +34,21 @@ describe("AgentIcon", () => {
       expect(opencodeSvg).not.toBe(customSvg);
     });
   });
+
+  describe("cursor", () => {
+    it("renders an SVG and uses the --cursor color token", () => {
+      const { container } = render(<AgentIcon agentType="cursor" />);
+      const svg = container.querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg!.outerHTML).toContain("var(--cursor)");
+    });
+
+    it("renders a distinct icon (not the custom fallback)", () => {
+      const cursorRender = render(<AgentIcon agentType="cursor" />);
+      const customRender = render(<AgentIcon agentType="custom" />);
+      const cursorSvg = cursorRender.container.querySelector("svg")!.innerHTML;
+      const customSvg = customRender.container.querySelector("svg")!.innerHTML;
+      expect(cursorSvg).not.toBe(customSvg);
+    });
+  });
 });

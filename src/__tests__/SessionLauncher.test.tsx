@@ -35,8 +35,9 @@ describe("SessionLauncher", () => {
     expect(screen.getByText("gemini")).toBeTruthy();
     expect(screen.getByText("codex")).toBeTruthy();
     expect(screen.getByText("opencode")).toBeTruthy();
+    expect(screen.getByText("cursor")).toBeTruthy();
     expect(screen.getByText("+")).toBeTruthy();
-    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(6);
+    expect(container.querySelectorAll(".launcher-pill .agent-icon")).toHaveLength(7);
   });
 
   it("defaults to claude agent", () => {
@@ -322,6 +323,122 @@ describe("SessionLauncher", () => {
       fireEvent.click(screen.getByText("Launch"));
 
       // Codex default is "new" mode → args should be empty, not carry ses_leak
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "codex", args: [] })
+      );
+    });
+  });
+
+  describe("Cursor", () => {
+    it("shows Cursor in agent pills", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      expect(screen.getByText("cursor")).toBeTruthy();
+    });
+
+    it("shows Cursor Options when cursor selected", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      fireEvent.click(screen.getByText("cursor"));
+      expect(screen.getByText("Cursor Options")).toBeTruthy();
+      expect(screen.queryByText("Claude Options")).toBeNull();
+    });
+
+    it("launches cursor with empty args for New mode (no prompt)", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("cursor"));
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "agent",
+          args: [],
+          agent_type: "cursor",
+        })
+      );
+    });
+
+    it("passes positional prompt for New mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("cursor"));
+      const promptInput = screen.getByPlaceholderText(/Enter a task for the agent/);
+      fireEvent.change(promptInput, { target: { value: "fix the bug" } });
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "agent",
+          args: ["fix the bug"],
+          agent_type: "cursor",
+        })
+      );
+    });
+
+    it("launches cursor with --continue for Continue mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("cursor"));
+      const cursorContinue = screen.getAllByText("Continue").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("Cursor")
+      );
+      fireEvent.click(cursorContinue!);
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "agent",
+          args: ["--continue"],
+          agent_type: "cursor",
+        })
+      );
+    });
+
+    it("launches cursor with --resume <id> for Resume mode", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+      fireEvent.click(screen.getByText("cursor"));
+      const cursorResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("Cursor")
+      );
+      fireEvent.click(cursorResume!);
+      const idInput = screen.getByPlaceholderText("Session ID (uuid)");
+      fireEvent.change(idInput, {
+        target: { value: "6ffd78e9-b552-49a7-9abf-2b00327c2764" },
+      });
+      fireEvent.click(screen.getByText("Launch"));
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "agent",
+          args: ["--resume", "6ffd78e9-b552-49a7-9abf-2b00327c2764"],
+          agent_type: "cursor",
+        })
+      );
+    });
+
+    it("disables Launch for Cursor Resume mode without ID", () => {
+      render(<SessionLauncher {...defaultProps} />);
+      fireEvent.click(screen.getByText("cursor"));
+      const cursorResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("Cursor")
+      );
+      fireEvent.click(cursorResume!);
+      const launchBtn = screen.getByText("Launch");
+      expect((launchBtn as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("clears resumeSessionId when switching from Cursor to another agent", () => {
+      const onLaunch = vi.fn();
+      render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
+
+      fireEvent.click(screen.getByText("cursor"));
+      const cursorResume = screen.getAllByText("Resume").find((el) =>
+        el.closest(".launcher-claude-options")?.textContent?.includes("Cursor")
+      );
+      fireEvent.click(cursorResume!);
+      fireEvent.change(screen.getByPlaceholderText("Session ID (uuid)"), {
+        target: { value: "abc-leak" },
+      });
+
+      fireEvent.click(screen.getByText("codex"));
+      fireEvent.click(screen.getByText("Launch"));
+
       expect(onLaunch).toHaveBeenCalledWith(
         expect.objectContaining({ command: "codex", args: [] })
       );

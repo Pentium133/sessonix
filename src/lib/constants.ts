@@ -5,6 +5,7 @@ export type Theme = "system" | ThemeId;
 export const AGENT_COLORS: Record<string, string> = {
   claude: "var(--claude)",
   codex: "var(--codex)",
+  cursor: "var(--cursor)",
   gemini: "var(--gemini)",
   opencode: "var(--opencode)",
   shell: "var(--text-dim)",

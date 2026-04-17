@@ -14,6 +14,7 @@ import type { AgentType } from "./types";
 const AGENT_LABELS: Record<AgentType, string> = {
   claude: "Claude",
   codex: "Codex",
+  cursor: "Cursor",
   gemini: "Gemini",
   opencode: "OpenCode",
   shell: "Shell",

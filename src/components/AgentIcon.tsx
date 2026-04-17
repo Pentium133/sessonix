@@ -49,6 +49,18 @@ function OpenCodeIcon({ color, size }: { color: string; size: number }) {
   );
 }
 
+// Cursor — I-beam text cursor inside a rounded square
+function CursorIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="12" height="12" rx="2" />
+      <line x1="8" y1="5" x2="8" y2="11" />
+      <line x1="6.5" y1="5" x2="9.5" y2="5" />
+      <line x1="6.5" y1="11" x2="9.5" y2="11" />
+    </svg>
+  );
+}
+
 // Shell — terminal prompt
 function ShellIcon({ color, size }: { color: string; size: number }) {
   return (
@@ -71,6 +83,7 @@ function CustomIcon({ color, size }: { color: string; size: number }) {
 const ICON_MAP: Record<string, React.FC<{ color: string; size: number }>> = {
   claude: ClaudeIcon,
   codex: CodexIcon,
+  cursor: CursorIcon,
   gemini: GeminiIcon,
   opencode: OpenCodeIcon,
   shell: ShellIcon,

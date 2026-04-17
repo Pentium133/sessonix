@@ -353,6 +353,11 @@ impl SessionManager {
             });
         }
 
+        // Cursor: no local session store to poll (unlike Codex/OpenCode which
+        // expose SQLite DBs). Relaunch relies on either `--continue` (last
+        // session in cwd, handled by the `agent` CLI itself) or a manual UUID
+        // via `--resume <id>`, captured in `stored_session_id` above.
+
         // Shell/custom: write prompt to stdin after delay so the shell has time to init.
         // Claude/Codex/Gemini: prompt passed as CLI positional arg, not stdin.
         let needs_stdin_prompt = matches!(params.agent_type, "shell" | "custom");
