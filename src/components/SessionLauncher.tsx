@@ -78,25 +78,31 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const launchingInTask = taskId != null ? tasks.find((t) => t.id === taskId) : undefined;
   const hideWorktreeSection = launchingInTask != null;
 
-  // Reset state when opening
+  // Reset state when opening. Depend on prefill's primitives (not the object
+  // ref) so a parent re-opening the launcher with new prefill while isOpen is
+  // already true still re-seeds the form.
+  const prefillAgent = prefill?.agent;
+  const prefillTaskName = prefill?.taskName;
+  const prefillSkipPermissions = prefill?.skipPermissions;
+  const prefillPrompt = prefill?.prompt;
   useEffect(() => {
     if (isOpen) {
       const defaultType = useSettingsStore.getState().defaultAgent;
-      const agentType = prefill?.agent || defaultType;
+      const agentType = prefillAgent || defaultType;
       setSelectedAgent(AGENT_PRESETS.find((a) => a.type === agentType) ?? CLAUDE_PRESET);
-      setTaskName(prefill?.taskName ?? "");
+      setTaskName(prefillTaskName ?? "");
       setCustomCommand("");
       setSessionMode("new");
-      setSkipPermissions(prefill?.skipPermissions ?? useSettingsStore.getState().claudeSkipPermissions);
+      setSkipPermissions(prefillSkipPermissions ?? useSettingsStore.getState().claudeSkipPermissions);
       skipPermsAutoSet.current = false;
       setResumeSessionId("");
-      setPrompt(prefill?.prompt ?? "");
+      setPrompt(prefillPrompt ?? "");
       setExtraArgs("");
       setUseWorktree(false);
       setWorktreeBranch("");
       setWorktreeCreating(false);
     }
-  }, [isOpen]);
+  }, [isOpen, prefillAgent, prefillTaskName, prefillSkipPermissions, prefillPrompt]);
 
   // Detect if project is a git repo when opening in session mode
   const projectPath = props.mode === "session" ? props.projectPath : "";
@@ -115,8 +121,10 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   useEscapeKey(onClose, isOpen);
 
   // Project mode: open native folder picker
+  const propsMode = props.mode;
+  const onAddProject = props.mode === "project" ? props.onAddProject : undefined;
   useEffect(() => {
-    if (!isOpen || props.mode !== "project") return;
+    if (!isOpen || propsMode !== "project") return;
     if (folderPickerTriggered.current) return;
     folderPickerTriggered.current = true;
     (async () => {
@@ -125,11 +133,11 @@ export default function SessionLauncher(props: SessionLauncherProps) {
         multiple: false,
         title: "Select project folder",
       });
-      if (typeof selected === "string") props.onAddProject(selected);
+      if (typeof selected === "string") onAddProject?.(selected);
       onClose();
       folderPickerTriggered.current = false;
     })();
-  }, [isOpen, props, onClose]);
+  }, [isOpen, propsMode, onAddProject, onClose]);
 
   if (!isOpen) return null;
   if (props.mode === "project") return null;
