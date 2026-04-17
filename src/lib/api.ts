@@ -272,8 +272,9 @@ export interface BranchListItem {
   name: string;
   /** Absolute path of the worktree where this branch is currently checked out. */
   worktree_path: string | null;
-  /** True when the branch is the main checkout — can't be attached as a task. */
-  is_main: boolean;
+  /** True when this branch is the HEAD of the project root workdir — git
+   *  won't double-check-out, so it can't back a Task. */
+  is_project_head: boolean;
   /** Set when an existing Task row already owns `worktree_path`. */
   task_id: number | null;
 }

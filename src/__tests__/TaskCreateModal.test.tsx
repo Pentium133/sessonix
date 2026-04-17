@@ -157,12 +157,12 @@ describe("TaskCreateModal", () => {
 
   it("populates the source dropdown with branches loaded from the backend", async () => {
     listBranchesMock.mockResolvedValueOnce([
-      { name: "main", worktree_path: "/repo", is_main: true, task_id: null },
-      { name: "feature/a", worktree_path: null, is_main: false, task_id: null },
+      { name: "main", worktree_path: "/repo", is_project_head: true, task_id: null },
+      { name: "feature/a", worktree_path: null, is_project_head: false, task_id: null },
       {
         name: "feature/taken",
         worktree_path: "/repo/.sessonix-worktrees/feature-taken",
-        is_main: false,
+        is_project_head: false,
         task_id: 42,
       },
     ]);
@@ -186,7 +186,7 @@ describe("TaskCreateModal", () => {
 
   it("submits with source_branch when attaching to an existing branch", async () => {
     listBranchesMock.mockResolvedValueOnce([
-      { name: "feature/hotfix", worktree_path: null, is_main: false, task_id: null },
+      { name: "feature/hotfix", worktree_path: null, is_project_head: false, task_id: null },
     ]);
     createTaskMock.mockResolvedValueOnce({
       id: 5,
@@ -222,10 +222,10 @@ describe("TaskCreateModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("disables the main-checkout option and blocks Create if it is forced", async () => {
+  it("disables the project-head option and blocks Create if it is forced", async () => {
     listBranchesMock.mockResolvedValueOnce([
-      { name: "main", worktree_path: "/repo", is_main: true, task_id: null },
-      { name: "feature/a", worktree_path: null, is_main: false, task_id: null },
+      { name: "main", worktree_path: "/repo", is_project_head: true, task_id: null },
+      { name: "feature/a", worktree_path: null, is_project_head: false, task_id: null },
     ]);
     render(<TaskCreateModal projectPath="/repo" onClose={vi.fn()} />);
 
@@ -253,7 +253,7 @@ describe("TaskCreateModal", () => {
       {
         name: "feature/taken",
         worktree_path: "/repo/.sessonix-worktrees/feature-taken",
-        is_main: false,
+        is_project_head: false,
         task_id: 7,
       },
     ]);

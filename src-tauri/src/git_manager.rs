@@ -77,9 +77,10 @@ pub struct BranchInfo {
     /// Absolute path of the worktree where this branch is currently checked out.
     /// `None` means the branch has no active checkout and is available for a new worktree.
     pub worktree_path: Option<String>,
-    /// `true` when `worktree_path` points at the main repo workdir — such a branch
-    /// can't be attached as a task.
-    pub is_main: bool,
+    /// `true` when this branch is the HEAD of the project's main workdir (i.e. the
+    /// branch you'd see in the project root, whatever its name). Git refuses to
+    /// attach another worktree to it, so it can't back a Task.
+    pub is_project_head: bool,
 }
 
 /// List local branches in the repo containing `working_dir`, annotated with where
@@ -165,11 +166,11 @@ pub fn list_branches(working_dir: &str) -> Result<Vec<BranchInfo>, String> {
         let mut info = BranchInfo {
             name: name.clone(),
             worktree_path: None,
-            is_main: false,
+            is_project_head: false,
         };
         if main_branch.as_deref() == Some(name.as_str()) {
             info.worktree_path = Some(main_workdir.to_string_lossy().to_string());
-            info.is_main = true;
+            info.is_project_head = true;
         } else if let Some(path) = linked.get(&name) {
             info.worktree_path = Some(path.to_string_lossy().to_string());
         }
@@ -627,17 +628,17 @@ mod tests {
         let status = get_git_status(path);
         let main_name = status.branch.unwrap();
         let main_info = by_name.get(&main_name).expect("main branch listed");
-        assert!(main_info.is_main);
+        assert!(main_info.is_project_head);
         assert!(main_info.worktree_path.is_some());
 
         let topic = by_name.get("topic").expect("topic listed");
-        assert!(!topic.is_main);
+        assert!(!topic.is_project_head);
         assert!(topic.worktree_path.is_none());
 
         let linked = by_name
             .get("feature/linked")
             .expect("linked branch listed");
-        assert!(!linked.is_main);
+        assert!(!linked.is_project_head);
         assert_eq!(linked.worktree_path.as_deref(), Some(wt.path.as_str()));
 
         remove_worktree(&wt.path).unwrap();
@@ -658,7 +659,7 @@ mod tests {
         let main_name = status.branch.unwrap();
         let by_name: std::collections::HashMap<_, _> =
             branches.iter().map(|b| (b.name.clone(), b)).collect();
-        assert!(by_name.get(&main_name).unwrap().is_main);
+        assert!(by_name.get(&main_name).unwrap().is_project_head);
         assert_eq!(
             by_name
                 .get("feature/wt")

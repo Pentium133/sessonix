@@ -20,8 +20,8 @@ function branchFromName(name: string): string {
 }
 
 /** Short human-readable state for a branch entry in the dropdown. */
-function branchState(b: BranchListItem): "new" | "attach" | "task" | "main" {
-  if (b.is_main) return "main";
+function branchState(b: BranchListItem): "new" | "attach" | "task" | "current" {
+  if (b.is_project_head) return "current";
   if (b.task_id != null) return "task";
   if (b.worktree_path) return "attach";
   return "new";
@@ -35,8 +35,8 @@ function stateLabel(state: ReturnType<typeof branchState>): string {
       return "attaches existing worktree";
     case "task":
       return "task already exists";
-    case "main":
-      return "main checkout (not selectable)";
+    case "current":
+      return "currently checked out here (not selectable)";
   }
 }
 
@@ -92,7 +92,7 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
     !creating &&
     trimmedName.length > 0 &&
     selectedState !== "task" &&
-    selectedState !== "main";
+    selectedState !== "current";
 
   function handleNameChange(v: string) {
     setName(v);
@@ -147,11 +147,11 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
     }
   }
 
-  // Display order, likely picks first: new → attach → task-taken → main.
-  // `main` sorts last (and is also rendered disabled) since it can never be
-  // selected for a worktree.
+  // Display order, likely picks first: new → attach → task-taken → current.
+  // The project-head branch (state "current") sorts last and renders
+  // disabled — git refuses a second worktree on it anyway.
   const sortedBranches = useMemo(() => {
-    const order = { new: 0, attach: 1, task: 2, main: 3 } as const;
+    const order = { new: 0, attach: 1, task: 2, current: 3 } as const;
     return [...branches].sort((a, b) => {
       const delta = order[branchState(a)] - order[branchState(b)];
       return delta !== 0 ? delta : a.name.localeCompare(b.name);
@@ -180,7 +180,7 @@ export default function TaskCreateModal({ projectPath, onClose }: TaskCreateModa
               <option
                 key={b.name}
                 value={b.name}
-                disabled={st === "main"}
+                disabled={st === "current"}
               >
                 {b.name} — {stateLabel(st)}
               </option>

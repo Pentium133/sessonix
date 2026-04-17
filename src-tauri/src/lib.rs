@@ -462,7 +462,9 @@ struct CreateTaskRequest {
 struct BranchListItem {
     name: String,
     worktree_path: Option<String>,
-    is_main: bool,
+    /// `true` when this branch is the HEAD of the project root workdir —
+    /// git refuses to attach another worktree to it, so it can't back a Task.
+    is_project_head: bool,
     /// Set when a task row already exists for `worktree_path` — the UI uses this
     /// to label the branch as "task exists" and skip create_task entirely.
     task_id: Option<i64>,
@@ -648,7 +650,8 @@ async fn create_task(
 /// - if the branch is already checked out in a linked worktree, reuse its path
 ///   and refuse if a task is already attached to it;
 /// - if it has no worktree, create one via `create_worktree_from_branch`;
-/// - refuse to attach to the main checkout (that's the project root itself).
+/// - refuse to attach to the branch currently checked out in the project root
+///   (git would refuse to double-check-out anyway).
 fn attach_source_branch(
     db: &std::sync::Arc<db::Db>,
     project_path: &str,
@@ -660,9 +663,9 @@ fn attach_source_branch(
         .find(|b| b.name == source_branch)
         .ok_or_else(|| format!("Branch '{}' not found", source_branch))?;
 
-    if entry.is_main {
+    if entry.is_project_head {
         return Err(format!(
-            "Branch '{}' is the main checkout — pick a different branch",
+            "Branch '{}' is currently checked out in the project root — pick a different branch",
             source_branch
         ));
     }
@@ -839,7 +842,7 @@ async fn list_branches(
                 BranchListItem {
                     name: b.name,
                     worktree_path: b.worktree_path,
-                    is_main: b.is_main,
+                    is_project_head: b.is_project_head,
                     task_id,
                 }
             })
