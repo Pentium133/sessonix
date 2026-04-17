@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useSessionStore } from "../store/sessionStore";
 
 interface SessionItemDragHandlers {
@@ -35,7 +35,10 @@ export function useSessionDragAndDrop(): UseSessionDragAndDrop {
   const dragOverRef = useRef<{ id: number; sortOrder: number } | null>(null);
   const dropAcceptedRef = useRef(false);
 
-  const handlersFor: UseSessionDragAndDrop["handlersFor"] = (session) => ({
+  // Stable across renders: closes only over refs and setters. Spreading the
+  // returned object onto SessionItem wouldn't break React.memo if SessionItem
+  // ever opts in — the inner arrow identities stay stable per `session.id`.
+  const handlersFor: UseSessionDragAndDrop["handlersFor"] = useCallback((session) => ({
     onDragStart: (e) => {
       setDraggingId(session.id);
       draggingIdRef.current = session.id;
@@ -72,7 +75,7 @@ export function useSessionDragAndDrop(): UseSessionDragAndDrop {
       dragOverRef.current = null;
       dropAcceptedRef.current = false;
     },
-  });
+  }), []);
 
   return { draggingId, dragOverId, draggingIdRef, handlersFor };
 }
