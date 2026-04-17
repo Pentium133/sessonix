@@ -1092,6 +1092,58 @@ mod task_validation_tests {
 }
 
 #[cfg(test)]
+mod attach_source_branch_tests {
+    use super::attach_source_branch;
+    use crate::{db::Db, git_manager};
+    use std::sync::Arc;
+
+    fn init_repo(path: &std::path::Path) {
+        let repo = git2::Repository::init(path).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+    }
+
+    /// The critical guard: a branch whose worktree already belongs to another
+    /// task must be rejected, otherwise two tasks could end up owning the same
+    /// worktree path and `delete_task` on either would pull the rug from under
+    /// the other.
+    #[test]
+    fn rejects_branch_already_claimed_by_a_task() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path());
+        let project_path = tmp.path().to_str().unwrap();
+
+        // Produce a branch+linked worktree pair so list_branches reports it.
+        let wt = git_manager::create_worktree(project_path, "feature/claimed").unwrap();
+
+        // In-memory DB with a task row pointing at that worktree.
+        let db = Arc::new(Db::open_in_memory().unwrap());
+        let project_id = db.insert_project("test", project_path).unwrap();
+        db.insert_task(
+            project_id,
+            "existing task",
+            Some(&wt.branch),
+            Some(&wt.path),
+            Some(&wt.base_commit),
+        )
+        .unwrap();
+
+        let err = attach_source_branch(&db, project_path, "feature/claimed")
+            .expect_err("must reject — a task already owns this branch's worktree");
+        assert!(
+            err.contains("already exists"),
+            "unexpected error text: {}",
+            err
+        );
+
+        git_manager::remove_worktree(&wt.path).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod update_tests {
     use super::is_newer_version;
 
