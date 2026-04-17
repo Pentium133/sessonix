@@ -1042,8 +1042,8 @@ body {
   cursor: not-allowed;
 }
 
-/* Sidebar templates section */
-.sidebar-templates {
+/* Sidebar quick prompts section */
+.sidebar-quick-prompts {
   border-top: 1px solid var(--border);
   padding: calc(var(--space) * 2) calc(var(--space) * 3);
   flex-shrink: 1;
@@ -1052,13 +1052,13 @@ body {
   overflow-y: auto;
 }
 
-.sidebar-templates-empty {
+.sidebar-quick-prompts-empty {
   font-size: 11px;
   color: var(--text-dim);
   padding: calc(var(--space) * 2) 0;
 }
 
-.sidebar-templates-header {
+.sidebar-quick-prompts-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1070,8 +1070,8 @@ body {
   margin-bottom: calc(var(--space) * 2);
 }
 
-/* Template item */
-.template-item {
+/* Quick prompt item */
+.quick-prompt-item {
   display: flex;
   align-items: center;
   border-radius: var(--radius);
@@ -1079,16 +1079,16 @@ body {
   padding: calc(var(--space) * 1.5) calc(var(--space) * 2);
 }
 
-.template-item:hover {
+.quick-prompt-item:hover {
   background: var(--hover);
 }
 
-.template-body {
+.quick-prompt-body {
   flex: 1;
   min-width: 0;
 }
 
-.template-name {
+.quick-prompt-name {
   font-size: 11px;
   font-weight: 500;
   color: var(--text-bright);
@@ -1097,7 +1097,7 @@ body {
   white-space: nowrap;
 }
 
-.template-prompt {
+.quick-prompt-prompt {
   font-size: 10px;
   color: var(--text-dim);
   overflow: hidden;
@@ -1106,7 +1106,7 @@ body {
   margin-top: 1px;
 }
 
-.template-actions {
+.quick-prompt-actions {
   display: flex;
   gap: 2px;
   flex-shrink: 0;
@@ -1115,11 +1115,11 @@ body {
   transition: opacity 0.1s;
 }
 
-.template-item:hover .template-actions {
+.quick-prompt-item:hover .quick-prompt-actions {
   opacity: 1;
 }
 
-.template-btn {
+.quick-prompt-btn {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -1135,22 +1135,22 @@ body {
   line-height: 1;
 }
 
-.template-btn:hover {
+.quick-prompt-btn:hover {
   color: var(--text);
   border-color: var(--text-dim);
 }
 
-.template-btn-run:hover {
+.quick-prompt-btn-run:hover {
   color: var(--success);
   border-color: var(--success);
 }
 
-.template-btn-delete:hover {
+.quick-prompt-btn-delete:hover {
   color: var(--error);
   border-color: var(--error);
 }
 
-.template-modal {
+.quick-prompt-modal {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -1159,12 +1159,12 @@ body {
   max-width: 90vw;
 }
 
-.template-modal .launcher-prompt {
+.quick-prompt-modal .launcher-prompt {
   min-height: 200px;
   max-height: 50vh;
 }
 
-/* Task create modal — smaller than template modal (fewer fields). */
+/* Task create modal — smaller than quick-prompt modal (fewer fields). */
 .task-create-modal {
   background: var(--surface);
   border: 1px solid var(--border);

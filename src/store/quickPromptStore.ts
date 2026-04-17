@@ -1,14 +1,14 @@
 import { create } from "zustand";
 import {
-  createTemplate,
-  listTemplates,
-  deleteTemplate,
-  updateTemplate,
+  createQuickPrompt,
+  listQuickPrompts,
+  deleteQuickPrompt,
+  updateQuickPrompt,
 } from "../lib/api";
-import type { TemplateInfo } from "../lib/api";
+import type { QuickPromptInfo } from "../lib/api";
 
-interface TemplateState {
-  templates: TemplateInfo[];
+interface QuickPromptState {
+  quickPrompts: QuickPromptInfo[];
   loaded: boolean;
 
   load: (projectPath: string) => Promise<void>;
@@ -23,23 +23,23 @@ interface TemplateState {
   remove: (id: number) => Promise<void>;
 }
 
-export const useTemplateStore = create<TemplateState>((set) => ({
-  templates: [],
+export const useQuickPromptStore = create<QuickPromptState>((set) => ({
+  quickPrompts: [],
   loaded: false,
 
   load: async (projectPath) => {
-    set({ templates: [], loaded: false });
+    set({ quickPrompts: [], loaded: false });
     try {
-      const templates = await listTemplates(projectPath);
-      set({ templates, loaded: true });
+      const quickPrompts = await listQuickPrompts(projectPath);
+      set({ quickPrompts, loaded: true });
     } catch {
-      set({ templates: [], loaded: true });
+      set({ quickPrompts: [], loaded: true });
     }
   },
 
   add: async (params) => {
-    const id = await createTemplate(params);
-    const entry: TemplateInfo = {
+    const id = await createQuickPrompt(params);
+    const entry: QuickPromptInfo = {
       id,
       name: params.name,
       project_path: params.project_path,
@@ -47,20 +47,20 @@ export const useTemplateStore = create<TemplateState>((set) => ({
       initial_prompt: params.initial_prompt ?? null,
       skip_permissions: params.skip_permissions,
     };
-    set((state) => ({ templates: [...state.templates, entry] }));
+    set((state) => ({ quickPrompts: [...state.quickPrompts, entry] }));
   },
 
   update: async (id, name, initialPrompt) => {
-    await updateTemplate(id, name, initialPrompt);
+    await updateQuickPrompt(id, name, initialPrompt);
     set((state) => ({
-      templates: state.templates.map((t) =>
+      quickPrompts: state.quickPrompts.map((t) =>
         t.id === id ? { ...t, name, initial_prompt: initialPrompt ?? null } : t
       ),
     }));
   },
 
   remove: async (id) => {
-    await deleteTemplate(id);
-    set((state) => ({ templates: state.templates.filter((t) => t.id !== id) }));
+    await deleteQuickPrompt(id);
+    set((state) => ({ quickPrompts: state.quickPrompts.filter((t) => t.id !== id) }));
   },
 }));

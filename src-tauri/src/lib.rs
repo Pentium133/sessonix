@@ -376,10 +376,10 @@ fn get_scrollback(
         .map_err(|e| e.to_string())
 }
 
-// --- Templates ---
+// --- Quick prompts ---
 
 #[derive(serde::Serialize)]
-struct TemplateInfo {
+struct QuickPromptInfo {
     id: i64,
     name: String,
     project_path: String,
@@ -389,7 +389,7 @@ struct TemplateInfo {
 }
 
 #[derive(serde::Deserialize)]
-struct CreateTemplateRequest {
+struct CreateQuickPromptRequest {
     name: String,
     project_path: String,
     agent: String,
@@ -398,8 +398,8 @@ struct CreateTemplateRequest {
 }
 
 #[tauri::command]
-fn create_template(state: tauri::State<'_, SessionManager>, request: CreateTemplateRequest) -> Result<i64, String> {
-    state.db.insert_template(
+fn create_quick_prompt(state: tauri::State<'_, SessionManager>, request: CreateQuickPromptRequest) -> Result<i64, String> {
+    state.db.insert_quick_prompt(
         &request.name,
         &request.project_path,
         &request.agent,
@@ -409,9 +409,9 @@ fn create_template(state: tauri::State<'_, SessionManager>, request: CreateTempl
 }
 
 #[tauri::command]
-fn list_templates(state: tauri::State<'_, SessionManager>, project_path: String) -> Result<Vec<TemplateInfo>, String> {
-    let rows = state.db.list_templates(&project_path).map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|t| TemplateInfo {
+fn list_quick_prompts(state: tauri::State<'_, SessionManager>, project_path: String) -> Result<Vec<QuickPromptInfo>, String> {
+    let rows = state.db.list_quick_prompts(&project_path).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|t| QuickPromptInfo {
         id: t.id,
         name: t.name,
         project_path: t.project_path,
@@ -422,13 +422,13 @@ fn list_templates(state: tauri::State<'_, SessionManager>, project_path: String)
 }
 
 #[tauri::command]
-fn delete_template(state: tauri::State<'_, SessionManager>, id: i64) -> Result<(), String> {
-    state.db.delete_template(id).map_err(|e| e.to_string())
+fn delete_quick_prompt(state: tauri::State<'_, SessionManager>, id: i64) -> Result<(), String> {
+    state.db.delete_quick_prompt(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn update_template(state: tauri::State<'_, SessionManager>, id: i64, name: String, initial_prompt: Option<String>) -> Result<(), String> {
-    state.db.update_template(id, &name, "", initial_prompt.as_deref(), false).map_err(|e| e.to_string())
+fn update_quick_prompt(state: tauri::State<'_, SessionManager>, id: i64, name: String, initial_prompt: Option<String>) -> Result<(), String> {
+    state.db.update_quick_prompt(id, &name, initial_prompt.as_deref()).map_err(|e| e.to_string())
 }
 
 // --- Tasks (worktree-scoped session groups) ---
@@ -1111,10 +1111,10 @@ pub fn run() {
             remove_worktree,
             clear_worktree_path,
             check_for_update,
-            create_template,
-            list_templates,
-            delete_template,
-            update_template,
+            create_quick_prompt,
+            list_quick_prompts,
+            delete_quick_prompt,
+            update_quick_prompt,
             create_task,
             list_tasks,
             delete_task,

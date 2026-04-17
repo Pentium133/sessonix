@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-interface TemplateSaveModalProps {
+interface QuickPromptSaveModalProps {
   title: string;
   initialName?: string;
   initialPrompt?: string;
@@ -8,7 +8,7 @@ interface TemplateSaveModalProps {
   onSave: (name: string, prompt: string) => void;
 }
 
-export default function TemplateSaveModal({ title, initialName, initialPrompt, onClose, onSave }: TemplateSaveModalProps) {
+export default function QuickPromptSaveModal({ title, initialName, initialPrompt, onClose, onSave }: QuickPromptSaveModalProps) {
   const [name, setName] = useState(initialName ?? "");
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
 
@@ -16,11 +16,11 @@ export default function TemplateSaveModal({ title, initialName, initialPrompt, o
 
   return (
     <div className="launcher-overlay" onClick={onClose}>
-      <div className="template-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="quick-prompt-modal" onClick={(e) => e.stopPropagation()}>
         <div className="launcher-title">{title}</div>
         <input
           className="launcher-input"
-          placeholder="Template name"
+          placeholder="Quick prompt name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus
