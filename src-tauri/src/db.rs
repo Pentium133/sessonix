@@ -287,7 +287,7 @@ impl Db {
     pub fn list_projects(&self) -> Result<Vec<ProjectRow>, rusqlite::Error> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT id, name, path FROM projects ORDER BY created_at DESC",
+            "SELECT id, name, path FROM projects ORDER BY created_at ASC, id ASC",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -829,6 +829,24 @@ mod tests {
 
         db.delete_project("/home/user/myapp").unwrap();
         assert_eq!(db.list_projects().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_list_projects_preserves_insertion_order() {
+        // Regression: new projects appear at the bottom on create, but used to jump
+        // to the top after restart because list_projects ordered by created_at DESC.
+        // The frontend appends new projects to the end, so DB must return oldest-first
+        // to keep the order stable across restarts.
+        let db = Db::open_in_memory().unwrap();
+        db.insert_project("alpha", "/tmp/alpha").unwrap();
+        db.insert_project("beta", "/tmp/beta").unwrap();
+        db.insert_project("gamma", "/tmp/gamma").unwrap();
+
+        let projects = db.list_projects().unwrap();
+        assert_eq!(projects.len(), 3);
+        assert_eq!(projects[0].path, "/tmp/alpha");
+        assert_eq!(projects[1].path, "/tmp/beta");
+        assert_eq!(projects[2].path, "/tmp/gamma");
     }
 
     #[test]
