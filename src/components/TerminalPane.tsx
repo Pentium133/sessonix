@@ -139,6 +139,10 @@ export default function TerminalPane({
     }).catch(console.error);
   }, [activeSessionId, isActiveSessionExited]);
 
+  // `isActiveSessionExited` is read inside this effect but intentionally not in
+  // deps: xterm's `disableStdin` is only applied at terminal *creation*, so a
+  // status tick flipping running → exited on the currently-attached terminal
+  // shouldn't remount it. The effect only fires on session switch.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || activeSessionId === null) return;
@@ -178,7 +182,8 @@ export default function TerminalPane({
         }
       });
     });
-  }, [activeSessionId, getOrCreateTerminal, isActiveSessionExited]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, getOrCreateTerminal]);
 
   // Theme sync: update all live terminals when theme changes (manual toggle or OS)
   useEffect(() => {
