@@ -5,7 +5,7 @@ import { useTemplateStore } from "../store/templateStore";
 import { useTaskStore } from "../store/taskStore";
 import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
-import { getGitStatus } from "../lib/git";
+import { useGitStatus } from "../hooks/useGitStatus";
 import { writeToSession } from "../lib/api";
 import { focusTerminal } from "../lib/terminalPool";
 import { showToast } from "./Toast";
@@ -15,7 +15,7 @@ import TemplateSaveModal from "./TemplateSaveModal";
 import TaskCreateModal from "./TaskCreateModal";
 import TaskGroup from "./TaskGroup";
 import WorktreeIcon from "./WorktreeIcon";
-import type { GitStatus, Session, Task } from "../lib/types";
+import type { Session, Task } from "../lib/types";
 import type { TemplateInfo } from "../lib/api";
 
 export default function Sidebar() {
@@ -53,17 +53,7 @@ export default function Sidebar() {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Record<number, boolean>>({});
 
-  const [projectGit, setProjectGit] = useState<GitStatus | null>(null);
-
-  useEffect(() => {
-    if (!activeProjectPath) { setProjectGit(null); return; }
-    const fetch = () => {
-      getGitStatus(activeProjectPath).then(setProjectGit).catch(() => setProjectGit(null));
-    };
-    fetch();
-    const interval = setInterval(fetch, 5_000);
-    return () => clearInterval(interval);
-  }, [activeProjectPath]);
+  const projectGit = useGitStatus(activeProjectPath, { pollMs: 5_000 });
 
   useEffect(() => {
     if (activeProjectPath) loadTemplates(activeProjectPath);

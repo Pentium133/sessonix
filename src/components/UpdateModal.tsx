@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { UpdateInfo } from "../lib/api";
 import { openReleasePage } from "../lib/updater";
+import { useEscapeKey } from "../hooks/useEscapeKey";
 
 interface UpdateModalProps {
   update: UpdateInfo;
@@ -12,13 +13,7 @@ const isMacOS = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAg
 export default function UpdateModal({ update, onClose }: UpdateModalProps) {
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const handleBackdrop = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) onClose();

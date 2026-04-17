@@ -3,12 +3,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type { AgentType } from "../lib/types";
 import { useSettingsStore } from "../store/settingsStore";
 import { useTaskStore } from "../store/taskStore";
-import { getGitStatus, createWorktree } from "../lib/git";
+import { createWorktree } from "../lib/git";
 import { slugify } from "../lib/slugify";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
 import type { LauncherPrefill } from "../store/uiStore";
+import { useEscapeKey } from "../hooks/useEscapeKey";
+import { useGitStatus } from "../hooks/useGitStatus";
 type ClaudeSessionMode = "new" | "continue" | "resume";
 type CodexSessionMode = "new" | "resume" | "last";
 type OpenCodeSessionMode = "new" | "resume" | "last";
@@ -136,8 +138,6 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   const [extraArgs, setExtraArgs] = useState("");
   const [useWorktree, setUseWorktree] = useState(false);
   const [worktreeBranch, setWorktreeBranch] = useState("");
-  const [isGitRepo, setIsGitRepo] = useState(false);
-  const [gitChangedFiles, setGitChangedFiles] = useState(0);
   const [worktreeCreating, setWorktreeCreating] = useState(false);
   const taskNameRef = useRef<HTMLInputElement>(null);
   const folderPickerTriggered = useRef(false);
@@ -168,22 +168,15 @@ export default function SessionLauncher(props: SessionLauncherProps) {
       setExtraArgs("");
       setUseWorktree(false);
       setWorktreeBranch("");
-      setIsGitRepo(false);
-      setGitChangedFiles(0);
       setWorktreeCreating(false);
     }
   }, [isOpen]);
 
   // Detect if project is a git repo when opening in session mode
   const projectPath = props.mode === "session" ? props.projectPath : "";
-  useEffect(() => {
-    if (isOpen && projectPath) {
-      getGitStatus(projectPath).then((s) => {
-        setIsGitRepo(s.is_repo);
-        setGitChangedFiles(s.changed_files);
-      }).catch(() => setIsGitRepo(false));
-    }
-  }, [isOpen, projectPath]);
+  const gitStatus = useGitStatus(projectPath || null, { enabled: isOpen });
+  const isGitRepo = gitStatus?.is_repo ?? false;
+  const gitChangedFiles = gitStatus?.changed_files ?? 0;
 
   // Auto-focus task name field for session mode
   useEffect(() => {
@@ -193,13 +186,7 @@ export default function SessionLauncher(props: SessionLauncherProps) {
   }, [isOpen, props.mode]);
 
   // Escape to close
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && isOpen) onClose();
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  useEscapeKey(onClose, isOpen);
 
   // Project mode: open native folder picker
   useEffect(() => {
