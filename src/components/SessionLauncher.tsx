@@ -4,6 +4,7 @@ import type { AgentType } from "../lib/types";
 import { useSettingsStore } from "../store/settingsStore";
 import { useTaskStore } from "../store/taskStore";
 import { createWorktree } from "../lib/git";
+import { getDefaultShell } from "../lib/api";
 import { slugify } from "../lib/slugify";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
@@ -149,10 +150,15 @@ export default function SessionLauncher(props: SessionLauncherProps) {
     if (launchingRef.current) return;
     launchingRef.current = true;
 
-    const command =
-      selectedAgent.type === "custom"
-        ? customCommand.trim()
-        : selectedAgent.command;
+    let command: string;
+    if (selectedAgent.type === "custom") {
+      command = customCommand.trim();
+    } else if (selectedAgent.type === "shell") {
+      // Resolve at launch so Windows hosts get pwsh/powershell/cmd instead of the Unix-leaning preset.
+      command = await getDefaultShell();
+    } else {
+      command = selectedAgent.command;
+    }
     if (!command) { launchingRef.current = false; return; }
 
     const name = taskName.trim() || `${selectedAgent.label} session`;

@@ -64,12 +64,12 @@ impl AgentAdapter for ShellAdapter {
 // --- Shell resolution ---
 
 #[cfg(unix)]
-fn resolve_shell() -> String {
+pub fn resolve_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
 }
 
 #[cfg(windows)]
-fn resolve_shell() -> String {
+pub fn resolve_shell() -> String {
     resolve_shell_windows(
         |name| which::which(name).is_ok(),
         std::env::var("COMSPEC").ok(),

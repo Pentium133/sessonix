@@ -76,6 +76,10 @@ export async function getAvailableAgents(): Promise<string[]> {
   return invoke<string[]>("get_available_agents");
 }
 
+export async function getDefaultShell(): Promise<string> {
+  return invoke<string>("get_default_shell");
+}
+
 // --- Project persistence ---
 
 export interface ProjectInfo {
