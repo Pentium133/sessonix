@@ -1,24 +1,30 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useProjectStore } from "../store/projectStore";
 import { useSessionStore } from "../store/sessionStore";
 import { useWorktreeDiff } from "../hooks/useWorktreeDiff";
 import DiffFileList from "./DiffFileList";
 import DiffFilePane from "./DiffFilePane";
 
+function resolveWorkingDir(
+  activeProjectPath: string | null,
+  lastActiveSession: Record<string, number>,
+  sessions: ReturnType<typeof useSessionStore.getState>["sessions"],
+): string | null {
+  if (!activeProjectPath) return null;
+  const lastId = lastActiveSession[activeProjectPath];
+  if (lastId) {
+    const s = sessions.find((x) => x.id === lastId);
+    if (s) return s.worktree_path || s.working_dir;
+  }
+  return activeProjectPath;
+}
+
 export default function DiffViewer() {
   const activeProjectPath = useProjectStore((s) => s.activeProjectPath);
   const lastActiveSession = useProjectStore((s) => s.lastActiveSession);
   const sessions = useSessionStore((s) => s.sessions);
 
-  const workingDir = useMemo(() => {
-    if (!activeProjectPath) return null;
-    const lastId = lastActiveSession[activeProjectPath];
-    if (lastId) {
-      const s = sessions.find((x) => x.id === lastId);
-      if (s) return s.worktree_path || s.working_dir;
-    }
-    return activeProjectPath;
-  }, [activeProjectPath, lastActiveSession, sessions]);
+  const workingDir = resolveWorkingDir(activeProjectPath, lastActiveSession, sessions);
 
   const { data, loading, error, refresh } = useWorktreeDiff(workingDir);
 

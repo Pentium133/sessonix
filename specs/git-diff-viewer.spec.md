@@ -215,7 +215,7 @@ Two-column flex layout:
 ## Error handling
 
 - All `git2` errors surface as `Result::Err(String)` from the IPC command and are rendered in the `DiffViewer` error state (no toast).
-- Invalid `working_dir` (does not exist / not a directory) returns `Err("Working dir not found: <path>")`.
+- Invalid `working_dir` (does not exist / not a directory) returns `Err("working dir not found: <path>")`.
   `[@test] ../src-tauri/src/diff_manager.rs::test_invalid_working_dir`
 
 ## Non-functional requirements

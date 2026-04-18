@@ -7,6 +7,11 @@ const MAX_FILE_LINES: usize = 5_000;
 const MAX_FILES: usize = 500;
 const RENAME_THRESHOLD: u16 = 50;
 
+/// Snapshot of the working-tree diff against `HEAD` for a single repository.
+///
+/// Returned to the frontend by the `get_worktree_diff` IPC command. When the
+/// target directory isn't inside a git repo, `is_repo` is `false` and the
+/// remaining fields are empty/`None`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeDiff {
@@ -14,9 +19,15 @@ pub struct WorktreeDiff {
     pub branch: Option<String>,
     pub head_sha: Option<String>,
     pub files: Vec<DiffFile>,
+    /// Number of changed files hidden past the `MAX_FILES` cap.
     pub truncated_files: u32,
 }
 
+/// A single changed file in the working-tree diff.
+///
+/// `old_path` is empty for `Added`; `new_path` is empty for `Deleted`. For
+/// `Renamed` both paths are populated and differ. `additions`/`deletions` come
+/// from `git2::Patch::line_stats()`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffFile {
@@ -28,6 +39,7 @@ pub struct DiffFile {
     pub payload: DiffPayload,
 }
 
+/// Classification of a diff entry relative to `HEAD`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DiffStatus {
@@ -37,6 +49,9 @@ pub enum DiffStatus {
     Renamed,
 }
 
+/// Content shape of a `DiffFile`. `Text` is the display happy-path; `Binary`
+/// and `TooLarge` are stubs so the UI renders a placeholder instead of the raw
+/// content.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiffPayload {
@@ -52,10 +67,24 @@ pub enum DiffPayload {
     },
 }
 
+/// Compute the working-tree diff of the repository containing `working_dir`
+/// against its current `HEAD`.
+///
+/// Produces a full snapshot (unstaged + staged + untracked), detects renames
+/// at 50% similarity, and applies per-file (1 MB / 5000 lines) and per-diff
+/// (500 files) caps. Binary files and oversized files are returned as stubs
+/// rather than content. Always caller's responsibility to run via
+/// `tauri::async_runtime::spawn_blocking` — the call reads from disk and
+/// invokes libgit2, both of which block.
+///
+/// # Errors
+/// - `working dir not found: <path>` when `working_dir` doesn't exist or isn't a directory
+/// - `bare repository not supported` when the resolved repo has no workdir
+/// - `git2 diff failed: <msg>` / `git2 find_similar failed: <msg>` on libgit2 failures
 pub fn get_worktree_diff(working_dir: &str) -> Result<WorktreeDiff, String> {
     let path = Path::new(working_dir);
     if !path.exists() || !path.is_dir() {
-        return Err(format!("Working dir not found: {}", working_dir));
+        return Err(format!("working dir not found: {}", working_dir));
     }
 
     let repo = match Repository::discover(working_dir) {
@@ -106,7 +135,7 @@ pub fn get_worktree_diff(working_dir: &str) -> Result<WorktreeDiff, String> {
 
     let workdir = repo
         .workdir()
-        .ok_or_else(|| "Bare repository not supported".to_string())?
+        .ok_or_else(|| "bare repository not supported".to_string())?
         .to_path_buf();
 
     let total_deltas = diff.deltas().len();
@@ -352,7 +381,7 @@ mod tests {
     #[test]
     fn test_invalid_working_dir() {
         let err = get_worktree_diff("/definitely/not/a/real/path/xyz123").unwrap_err();
-        assert!(err.contains("Working dir not found"));
+        assert!(err.contains("working dir not found"));
     }
 
     #[test]
