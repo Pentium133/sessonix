@@ -26,6 +26,22 @@ Launch Claude Code, Codex CLI, Gemini CLI, OpenCode, or any custom command — a
 
 Live status badges show the current state of each session — Thinking, Reading, Writing, Idle, or Error — without switching to it. For Claude, optional hooks provide instant status updates.
 
+### Review Agent Changes
+
+Press `Cmd+0` (or click the pinned Diff tab) to see every line your agents wrote — a read-only diff viewer scoped to the active session's worktree, or the project root if no session is focused. File list on the left, line-by-line unified diff on the right. Renames, untracked, and binary files all handled; large diffs truncate cleanly.
+
+### Switch Instantly, Lose Nothing
+
+Flip between sessions with `Cmd+1-9`. A ring buffer captures all output while you're away, so you see every line the agent produced — even if you weren't watching.
+
+### Survives Restarts
+
+Projects, sessions, tasks, active selection, and terminal scrollback are persisted to a local database. Relaunch the app and pick up exactly where you left off.
+
+### Organize by Project
+
+Group sessions by project directory. The entire UI scopes to the active project — sidebar, session tabs, keyboard shortcuts. Switch projects in one click.
+
 ### Group Sessions into Tasks
 
 Create a Task — give it a name, get a git worktree on its own branch — then launch multiple agent and shell sessions inside it. A Claude session to write the code, a shell to run tests, a Codex session for a second opinion. All three share the same worktree, all three live under the same Task in the sidebar, collapsed into a neat group.
@@ -35,18 +51,6 @@ Branch names are auto-generated from the task name as you type (`Fix auth flow` 
 ### Git Worktrees Built In
 
 Tick a checkbox to launch a single session in an isolated git worktree — the agent works on its own branch in its own directory, and Sessonix cleans up when you're done. For multi-session workflows, wrap the worktree in a Task (above).
-
-### Switch Instantly, Lose Nothing
-
-Flip between sessions with `Cmd+1-9`. A ring buffer captures all output while you're away, so you see every line the agent produced — even if you weren't watching.
-
-### Organize by Project
-
-Group sessions by project directory. The entire UI scopes to the active project — sidebar, session tabs, keyboard shortcuts. Switch projects in one click.
-
-### Survives Restarts
-
-Projects, sessions, tasks, active selection, and terminal scrollback are persisted to a local database. Relaunch the app and pick up exactly where you left off.
 
 ### Git Status at a Glance
 
@@ -60,6 +64,7 @@ Current branch, modified/added/deleted file counts — always visible in the sta
 | `⌘⇧W` | Kill session |
 | `⌘⇧K` | Add project |
 | `⌘1-9` | Switch to session 1–9 |
+| `⌘0` | Open Diff viewer |
 
 ### Native Desktop Experience
 
