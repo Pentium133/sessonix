@@ -1,0 +1,11 @@
+{
+  "name": "odyssey4me/code-review",
+  "version": "0.2.0",
+  "private": false,
+  "summary": "Review PRs, MRs, and Gerrit changes with focus on security, maintainability, and architectural fit. Leverages github, gitlab, or gerrit skills based on repository context. Use when asked to review my code, check this PR, review a pull request, look at a merge request, review a patchset, or provide code review feedback.",
+  "skills": {
+    "code-review": {
+      "path": "SKILL.md"
+    }
+  }
+}
