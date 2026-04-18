@@ -4,6 +4,11 @@ import SessionLauncher from "../components/SessionLauncher";
 import { useTaskStore } from "../store/taskStore";
 import type { Task } from "../lib/types";
 
+vi.mock("../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
+  return { ...actual, getDefaultShell: vi.fn(async () => "zsh") };
+});
+
 describe("SessionLauncher", () => {
   const defaultProps = {
     mode: "session" as const,
@@ -89,13 +94,16 @@ describe("SessionLauncher", () => {
     );
   });
 
-  it("calls onLaunch with shell agent", () => {
+  it("calls onLaunch with shell agent", async () => {
     const onLaunch = vi.fn();
     render(<SessionLauncher {...defaultProps} onLaunch={onLaunch} />);
     fireEvent.click(screen.getByText("shell"));
     fireEvent.click(screen.getByText("Launch"));
-    expect(onLaunch).toHaveBeenCalledWith(
-      expect.objectContaining({ command: "zsh", agent_type: "shell" })
+    // Shell command is resolved through the getDefaultShell IPC (mocked to "zsh").
+    await vi.waitFor(() =>
+      expect(onLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "zsh", agent_type: "shell" })
+      )
     );
   });
 

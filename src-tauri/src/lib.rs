@@ -233,6 +233,14 @@ fn get_available_agents(adapters: tauri::State<'_, AdapterRegistry>) -> Result<V
     Ok(adapters.available_types().into_iter().map(String::from).collect())
 }
 
+/// Returns the shell binary to spawn for "shell" sessions on this platform.
+/// Unix: `$SHELL` or `/bin/bash` fallback. Windows: pwsh.exe → powershell.exe
+/// → %COMSPEC% → cmd.exe.
+#[tauri::command]
+fn get_default_shell() -> String {
+    adapters::shell::resolve_shell()
+}
+
 // --- Project/Session persistence commands ---
 
 #[tauri::command]
@@ -1315,6 +1323,7 @@ pub fn run() {
             get_session_count,
             get_session_status,
             get_available_agents,
+            get_default_shell,
             get_session_cost,
             install_claude_hooks,
             check_claude_hooks,

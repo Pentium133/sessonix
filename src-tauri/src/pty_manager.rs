@@ -166,9 +166,11 @@ impl PtyManager {
                 working_dir
             )));
         }
-        // Canonicalize to resolve symlinks and reject .. components
-        let canonical = wd
-            .canonicalize()
+        // Canonicalize to resolve symlinks and reject .. components.
+        // `dunce::canonicalize` strips the `\\?\` UNC prefix on Windows for
+        // drive-letter paths (some child processes reject UNC paths); on Unix
+        // it's a thin passthrough to `std::fs::canonicalize`.
+        let canonical = dunce::canonicalize(wd)
             .map_err(|_| AppError::Pty(format!("Directory '{}' does not exist", working_dir)))?;
         if !canonical.is_dir() {
             return Err(AppError::Pty(format!(
@@ -181,17 +183,9 @@ impl PtyManager {
         cmd.args(args);
         cmd.cwd(&canonical);
 
-        // Whitelist safe env vars — don't leak API keys or tokens to child processes
-        const SAFE_ENV_VARS: &[&str] = &[
-            "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL",
-            "LC_CTYPE", "LC_MESSAGES", "LC_TERMINAL", "TMPDIR", "XDG_DATA_HOME",
-            "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-            "EDITOR", "VISUAL", "PAGER", "LESS", "COLORTERM", "TERM_PROGRAM",
-            // SSH agent forwarding — explicit list, not prefix match
-            "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY",
-        ];
+        // Whitelist safe env vars — don't leak API keys or tokens to child processes.
         for (key, value) in std::env::vars() {
-            if SAFE_ENV_VARS.contains(&key.as_str()) {
+            if is_safe_env_key(&key) {
                 cmd.env(key, value);
             }
         }
@@ -330,6 +324,38 @@ impl Drop for PtyManager {
     }
 }
 
+/// Environment-variable whitelist for spawned PTY processes.
+///
+/// Cross-platform and Unix-specific keys a child process may legitimately need.
+/// Intentionally excludes API-key-shaped variables so credentials from the
+/// parent (e.g. `ANTHROPIC_API_KEY`) never leak into agent sessions.
+const UNIX_SAFE_ENV_VARS: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL",
+    "LC_CTYPE", "LC_MESSAGES", "LC_TERMINAL", "TMPDIR", "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "EDITOR", "VISUAL", "PAGER", "LESS", "COLORTERM", "TERM_PROGRAM",
+    // SSH agent forwarding — explicit list, not prefix match
+    "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY",
+];
+
+/// Windows-specific keys. Many console apps (PowerShell, cmd.exe, Git for
+/// Windows) refuse to start or misbehave without these.
+const WINDOWS_SAFE_ENV_VARS: &[&str] = &[
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
+    "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE",
+    "HOMEDRIVE", "HOMEPATH",
+    "TEMP", "TMP",
+    "PATHEXT", "COMSPEC",
+    "USERNAME", "COMPUTERNAME",
+];
+
+/// Case-sensitive check (both Unix and Windows env keys come through
+/// `std::env::vars()` in their native case).
+fn is_safe_env_key(key: &str) -> bool {
+    UNIX_SAFE_ENV_VARS.contains(&key) || WINDOWS_SAFE_ENV_VARS.contains(&key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +465,67 @@ mod tests {
             pixel_height: 0,
         });
         assert!(result.is_ok());
+    }
+
+    // ---------- Env whitelist ----------
+
+    #[test]
+    fn test_env_whitelist_accepts_cross_platform_keys() {
+        assert!(is_safe_env_key("PATH"));
+        assert!(is_safe_env_key("LANG"));
+        assert!(is_safe_env_key("EDITOR"));
+    }
+
+    #[test]
+    fn test_env_whitelist_accepts_unix_keys() {
+        assert!(is_safe_env_key("HOME"));
+        assert!(is_safe_env_key("SHELL"));
+        assert!(is_safe_env_key("SSH_AUTH_SOCK"));
+    }
+
+    #[test]
+    fn test_env_whitelist_accepts_windows_keys() {
+        assert!(is_safe_env_key("USERPROFILE"));
+        assert!(is_safe_env_key("APPDATA"));
+        assert!(is_safe_env_key("LOCALAPPDATA"));
+        assert!(is_safe_env_key("SYSTEMROOT"));
+        assert!(is_safe_env_key("PATHEXT"));
+        assert!(is_safe_env_key("COMSPEC"));
+        assert!(is_safe_env_key("PROGRAMFILES(X86)"));
+    }
+
+    #[test]
+    fn test_env_whitelist_rejects_secrets() {
+        assert!(!is_safe_env_key("ANTHROPIC_API_KEY"));
+        assert!(!is_safe_env_key("OPENAI_API_KEY"));
+        assert!(!is_safe_env_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(!is_safe_env_key("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn test_env_whitelist_is_case_sensitive() {
+        // std::env::vars() reports native case; we don't normalise.
+        assert!(!is_safe_env_key("path"));
+        assert!(!is_safe_env_key("userprofile"));
+    }
+
+    // ---------- Canonicalisation ----------
+
+    #[test]
+    fn test_canonicalize_existing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canon = dunce::canonicalize(tmp.path()).unwrap();
+        assert!(canon.is_dir());
+        // On Windows dunce strips \\?\; on Unix it's a passthrough.
+        // Either way the result must be a prefix-less absolute path.
+        let as_str = canon.to_string_lossy();
+        assert!(!as_str.starts_with(r"\\?\"));
+    }
+
+    #[test]
+    fn test_canonicalize_missing_dir_returns_err() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(dunce::canonicalize(&missing).is_err());
     }
 }

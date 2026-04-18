@@ -7,7 +7,7 @@ import { useUiStore } from "../store/uiStore";
 import { useSessionActions } from "../hooks/useSessionActions";
 import { useGitStatus } from "../hooks/useGitStatus";
 import { useSessionDragAndDrop } from "../hooks/useSessionDragAndDrop";
-import { writeToSession } from "../lib/api";
+import { writeToSession, getDefaultShell } from "../lib/api";
 import { focusTerminal } from "../lib/terminalPool";
 import { showToast } from "./Toast";
 import SessionItem from "./SessionItem";
@@ -113,8 +113,9 @@ export default function Sidebar() {
   const launchShellInTask = async (task: Task) => {
     if (!activeProjectPath) return;
     try {
+      const command = await getDefaultShell();
       await useSessionStore.getState().addSession({
-        command: "zsh",
+        command,
         args: [],
         working_dir: activeProjectPath,
         task_name: "shell",

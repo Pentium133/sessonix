@@ -7,12 +7,18 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
-/// Working directory to Claude dir-key: /Users/serg/repo → -Users-serg-repo
-/// NOTE: This mirrors Claude's own directory naming in ~/.claude/projects/.
-/// Paths differing only by hyphens vs slashes will collide (e.g. /a-b/c and /a/b-c).
-/// This is a known limitation of Claude's scheme and cannot be changed here.
+/// Working directory to Claude dir-key:
+/// - Unix  `/Users/serg/repo`    → `-Users-serg-repo`
+/// - Win   `C:\Users\serg\repo`  → `C--Users-serg-repo`
+///
+/// Mirrors Claude CLI's `~/.claude/projects/` naming: `/`, `\`, and `:` are
+/// all replaced with `-`. Paths differing only in separators collide
+/// (e.g. `/a-b/c` vs `/a/b-c`) — a known Claude-scheme limitation.
 fn dir_key(working_dir: &str) -> String {
-    working_dir.replace('/', "-")
+    working_dir
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c })
+        .collect()
 }
 
 /// Find the most recent .jsonl file for a given working directory.
@@ -333,6 +339,18 @@ mod tests {
     fn test_dir_key() {
         assert_eq!(dir_key("/Users/serg/Developer/js/aicoder"), "-Users-serg-Developer-js-aicoder");
         assert_eq!(dir_key("/tmp/app"), "-tmp-app");
+    }
+
+    #[test]
+    fn test_dir_key_windows_path() {
+        assert_eq!(dir_key(r"C:\Users\serg\repo"), "C--Users-serg-repo");
+        assert_eq!(dir_key(r"D:\work\aicoder"), "D--work-aicoder");
+    }
+
+    #[test]
+    fn test_dir_key_windows_mixed_separators() {
+        // Some tooling normalises to forward slashes mid-path.
+        assert_eq!(dir_key(r"C:\Users/serg\repo"), "C--Users-serg-repo");
     }
 
     #[test]

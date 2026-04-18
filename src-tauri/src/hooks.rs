@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(unix)]
 const HOOK_COMMAND: &str = "bash ~/.sessonix/hook-handler.sh";
 
 /// Hook status file written by hook-handler.sh. Fields are deserialized from
@@ -49,6 +50,16 @@ pub fn read_hook_status(pty_id: u32) -> Option<HookStatus> {
 
 /// Install Sessonix hooks into Claude's settings.json.
 /// Preserves existing hooks from other tools.
+///
+/// Windows: no-op. The handler is a bash script and Windows Claude CLI has no
+/// guaranteed bash available. Claude status detection falls back to JSONL
+/// tailing, which is platform-independent.
+#[cfg(windows)]
+pub fn install_hooks() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
 pub fn install_hooks() -> Result<bool, String> {
     let settings_path = claude_settings_path()
         .ok_or_else(|| "Cannot find Claude config directory".to_string())?;
@@ -164,6 +175,14 @@ pub fn install_hooks() -> Result<bool, String> {
 }
 
 /// Check if Sessonix hooks are already installed.
+///
+/// Windows: always `false` — `install_hooks` is a no-op there.
+#[cfg(windows)]
+pub fn check_installed() -> bool {
+    false
+}
+
+#[cfg(unix)]
 pub fn check_installed() -> bool {
     let settings_path = match claude_settings_path() {
         Some(p) => p,
@@ -183,6 +202,7 @@ pub fn check_installed() -> bool {
     is_installed(&settings)
 }
 
+#[cfg(unix)]
 fn is_installed(settings: &serde_json::Value) -> bool {
     settings.get("hooks")
         .and_then(|h| h.as_object())
@@ -204,6 +224,7 @@ fn is_installed(settings: &serde_json::Value) -> bool {
 }
 
 /// Install the hook handler script to ~/.sessonix/
+#[cfg(unix)]
 fn install_handler_script() -> Result<(), String> {
     let dir = sessonix_dir();
     fs::create_dir_all(&dir)
@@ -232,6 +253,7 @@ fn install_handler_script() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn claude_settings_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     Some(home.join(".claude").join("settings.json"))
@@ -247,7 +269,7 @@ fn hooks_dir() -> PathBuf {
     sessonix_dir().join("hooks")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -287,5 +309,17 @@ mod tests {
             }
         });
         assert!(!is_installed(&settings));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn test_install_hooks_is_noop_on_windows() {
+        // Must not touch ~/.claude/settings.json or write any script.
+        assert_eq!(install_hooks().unwrap(), false);
+        assert!(!check_installed());
     }
 }
