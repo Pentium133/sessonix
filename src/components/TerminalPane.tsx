@@ -129,34 +129,6 @@ export default function TerminalPane({
     []
   );
 
-  // Restore saved scrollback for any freshly-created terminal (first open,
-  // or re-opened after LRU eviction). Before this ran for running sessions,
-  // switching back to an evicted session showed an empty terminal because
-  // `attachSession`'s ring-buffer write landed while the pool had no instance
-  // and the disk scrollback was only restored for `exited` sessions. The
-  // `pendingWrites` queue on the instance doubles as the "needs restore" flag
-  // and a holding area so live PTY output stays in order behind the history.
-  useEffect(() => {
-    if (activeSessionId === null) return;
-    const instance = getTerminal(activeSessionId);
-    if (!instance || instance.disposed) return;
-    if (!instance.pendingWrites) return;
-
-    let cancelled = false;
-    getScrollback(activeSessionId)
-      .then((data) => {
-        if (cancelled || instance.disposed) return;
-        flushPendingWrites(activeSessionId, data || undefined);
-      })
-      .catch(() => {
-        if (cancelled || instance.disposed) return;
-        flushPendingWrites(activeSessionId);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSessionId]);
-
   // `isActiveSessionExited` is read inside this effect but intentionally not in
   // deps: xterm's `disableStdin` is only applied at terminal *creation*, so a
   // status tick flipping running → exited on the currently-attached terminal
@@ -192,6 +164,27 @@ export default function TerminalPane({
         child.dataset.sessionId === String(activeSessionId) ? "block" : "none";
     }
 
+    // Restore saved scrollback for any freshly-created terminal (first open, or
+    // re-opened after LRU eviction). `pendingWrites` doubles as the "needs
+    // restore" flag — set in getOrCreateTerminal, cleared by flushPendingWrites.
+    // Must live in this effect (not a separate one declared earlier) so it runs
+    // AFTER getOrCreateTerminal adds the instance to the pool. A prior split
+    // ordered the restore effect first, which saw an empty pool on new sessions,
+    // early-returned, and left PTY output stuck in pendingWrites forever.
+    let cancelled = false;
+    if (instance.pendingWrites) {
+      const id = activeSessionId;
+      getScrollback(id)
+        .then((data) => {
+          if (cancelled || instance.disposed) return;
+          flushPendingWrites(id, data || undefined);
+        })
+        .catch(() => {
+          if (cancelled || instance.disposed) return;
+          flushPendingWrites(id);
+        });
+    }
+
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (!instance.disposed) {
@@ -200,6 +193,9 @@ export default function TerminalPane({
         }
       });
     });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, getOrCreateTerminal]);
 
