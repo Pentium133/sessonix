@@ -7,7 +7,12 @@ export interface TerminalInstance {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
   disposed: boolean;
-  scrollbackRestored?: boolean;
+  /**
+   * Writes queue here until scrollback restore resolves. `undefined` means
+   * the terminal is "ready" — writes go directly to xterm. `[]` means still
+   * loading; live PTY output must wait so the restored history stays on top.
+   */
+  pendingWrites?: Uint8Array[];
 }
 
 export const MAX_LIVE_TERMINALS = 5;
@@ -53,9 +58,29 @@ export function findLRUVictim(keepId: number): number | undefined {
 
 export function writeToTerminal(sessionId: number, data: Uint8Array): void {
   const instance = pool.get(sessionId);
-  if (instance && !instance.disposed) {
-    instance.terminal.write(data);
+  if (!instance || instance.disposed) return;
+  if (instance.pendingWrites) {
+    instance.pendingWrites.push(data);
+    return;
   }
+  instance.terminal.write(data);
+}
+
+/**
+ * Flush queued writes after scrollback restore finishes. Call order inside:
+ * scrollback (if any) → queued PTY output → future writes go direct. JS is
+ * single-threaded so no concurrent writes can race this sequence.
+ */
+export function flushPendingWrites(sessionId: number, scrollback?: string): void {
+  const instance = pool.get(sessionId);
+  if (!instance || instance.disposed) return;
+  const queue = instance.pendingWrites ?? [];
+  if (scrollback) instance.terminal.write(scrollback);
+  for (const chunk of queue) {
+    if (instance.disposed) return;
+    instance.terminal.write(chunk);
+  }
+  instance.pendingWrites = undefined;
 }
 
 export function focusTerminal(sessionId: number): void {

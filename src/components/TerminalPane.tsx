@@ -11,6 +11,7 @@ import {
   type TerminalInstance,
   deleteTerminal,
   findLRUVictim,
+  flushPendingWrites,
   getTerminal,
   poolEntries,
   poolSize,
@@ -118,6 +119,9 @@ export default function TerminalPane({
         fitAddon,
         serializeAddon,
         disposed: false,
+        // Buffer until scrollback-restore runs so historical state lands
+        // before whatever PTY output arrives between attach and terminal.open.
+        pendingWrites: [],
       };
       setTerminal(sessionId, instance);
       return instance;
@@ -125,21 +129,33 @@ export default function TerminalPane({
     []
   );
 
-  // Restore scrollback for exited sessions
+  // Restore saved scrollback for any freshly-created terminal (first open,
+  // or re-opened after LRU eviction). Before this ran for running sessions,
+  // switching back to an evicted session showed an empty terminal because
+  // `attachSession`'s ring-buffer write landed while the pool had no instance
+  // and the disk scrollback was only restored for `exited` sessions. The
+  // `pendingWrites` queue on the instance doubles as the "needs restore" flag
+  // and a holding area so live PTY output stays in order behind the history.
   useEffect(() => {
-    if (activeSessionId === null || !isActiveSessionExited) return;
-
+    if (activeSessionId === null) return;
     const instance = getTerminal(activeSessionId);
     if (!instance || instance.disposed) return;
-    if (instance.scrollbackRestored) return;
+    if (!instance.pendingWrites) return;
 
-    getScrollback(activeSessionId).then((data) => {
-      if (data) {
-        instance.terminal.write(data);
-        instance.scrollbackRestored = true;
-      }
-    }).catch(console.error);
-  }, [activeSessionId, isActiveSessionExited]);
+    let cancelled = false;
+    getScrollback(activeSessionId)
+      .then((data) => {
+        if (cancelled || instance.disposed) return;
+        flushPendingWrites(activeSessionId, data || undefined);
+      })
+      .catch(() => {
+        if (cancelled || instance.disposed) return;
+        flushPendingWrites(activeSessionId);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId]);
 
   // `isActiveSessionExited` is read inside this effect but intentionally not in
   // deps: xterm's `disableStdin` is only applied at terminal *creation*, so a

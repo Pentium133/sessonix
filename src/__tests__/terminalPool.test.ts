@@ -3,6 +3,7 @@ import {
   MAX_LIVE_TERMINALS,
   deleteTerminal,
   findLRUVictim,
+  flushPendingWrites,
   focusTerminal,
   getTerminal,
   poolEntries,
@@ -133,6 +134,64 @@ describe("terminalPool", () => {
 
     it("is a no-op for missing ids", () => {
       expect(() => writeToTerminal(1234, new Uint8Array([0]))).not.toThrow();
+    });
+
+    it("queues writes while pendingWrites is defined", () => {
+      const inst = makeInstance();
+      inst.pendingWrites = [];
+      setTerminal(7, inst);
+      const a = new Uint8Array([1]);
+      const b = new Uint8Array([2]);
+      writeToTerminal(7, a);
+      writeToTerminal(7, b);
+      expect(inst.terminal.write).not.toHaveBeenCalled();
+      expect(inst.pendingWrites).toEqual([a, b]);
+    });
+  });
+
+  describe("flushPendingWrites", () => {
+    it("writes scrollback then queued chunks in order, then clears the queue", () => {
+      const inst = makeInstance();
+      inst.pendingWrites = [new Uint8Array([11]), new Uint8Array([22])];
+      setTerminal(7, inst);
+
+      flushPendingWrites(7, "SCROLL");
+
+      expect((inst.terminal.write as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toEqual([
+        "SCROLL",
+        new Uint8Array([11]),
+        new Uint8Array([22]),
+      ]);
+      expect(inst.pendingWrites).toBeUndefined();
+    });
+
+    it("flushes queued writes even when no scrollback is provided", () => {
+      const inst = makeInstance();
+      inst.pendingWrites = [new Uint8Array([5])];
+      setTerminal(7, inst);
+
+      flushPendingWrites(7);
+
+      expect(inst.terminal.write).toHaveBeenCalledWith(new Uint8Array([5]));
+      expect(inst.pendingWrites).toBeUndefined();
+    });
+
+    it("is a no-op for disposed or missing instances", () => {
+      const disposed = makeInstance(true);
+      disposed.pendingWrites = [new Uint8Array([1])];
+      setTerminal(7, disposed);
+      flushPendingWrites(7, "X");
+      flushPendingWrites(999);
+      expect(disposed.terminal.write).not.toHaveBeenCalled();
+    });
+
+    it("after flush, subsequent writes go directly to xterm", () => {
+      const inst = makeInstance();
+      inst.pendingWrites = [];
+      setTerminal(7, inst);
+      flushPendingWrites(7);
+      writeToTerminal(7, new Uint8Array([42]));
+      expect(inst.terminal.write).toHaveBeenCalledWith(new Uint8Array([42]));
     });
   });
 
