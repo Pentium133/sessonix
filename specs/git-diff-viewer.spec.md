@@ -1,6 +1,6 @@
 ---
 name: Git Diff Viewer
-description: View uncommitted working-tree diff of an active project or session worktree in a read-only split UI
+description: View uncommitted working-tree diff of an active project or session worktree in a read-only unified (line-by-line) UI
 targets:
   - ../src-tauri/src/diff_manager.rs
   - ../src-tauri/src/lib.rs
@@ -16,7 +16,7 @@ targets:
 
 # Git Diff Viewer
 
-Read-only split-view diff of the current **working tree vs `HEAD`** for the active project or the worktree of a previously-selected session. Surfaced via a persistent "Diff" pseudo-session pinned to the right of the `SummaryBar`.
+Read-only **unified (line-by-line)** diff of the current **working tree vs `HEAD`** for the active project or the worktree of a previously-selected session. Surfaced via a persistent "Diff" pseudo-session pinned to the right of the `SummaryBar`.
 
 ## Scope
 
@@ -166,7 +166,7 @@ target = lastFocusedSessionIdByProject[activeProjectPath]
 
 Two-column flex layout:
 - Left column: `DiffFileList`, fixed 280 px width, scrollable, shows status icon + path + `+N / −M` counters per file.
-- Right column: `DiffFilePane`, fills remaining width, renders `react-diff-viewer-continued` in `splitView: true` mode for the currently-selected file.
+- Right column: `DiffFilePane`, fills remaining width, renders `react-diff-viewer-continued` in `splitView: false` (unified, line-by-line) mode for the currently-selected file.
 
 ### States
 

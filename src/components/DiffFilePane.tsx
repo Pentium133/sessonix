@@ -43,7 +43,7 @@ export default function DiffFilePane({ file }: Props) {
       <ReactDiffViewer
         oldValue={oldContent}
         newValue={newContent}
-        splitView={true}
+        splitView={false}
         compareMethod={DiffMethod.LINES}
         useDarkTheme={true}
         hideLineNumbers={false}
