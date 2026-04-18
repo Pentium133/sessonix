@@ -1,5 +1,6 @@
 mod adapters;
 mod db;
+mod diff_manager;
 mod error;
 mod git_manager;
 mod hooks;
@@ -866,6 +867,13 @@ async fn get_git_status(working_dir: String) -> Result<git_manager::GitStatus, S
     .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_worktree_diff(working_dir: String) -> Result<diff_manager::WorktreeDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || diff_manager::get_worktree_diff(&working_dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Detect which AI agent CLIs are installed (claude, codex, gemini, opencode).
 /// Returns a map of agent name → found in PATH.
 #[tauri::command]
@@ -1328,6 +1336,7 @@ pub fn run() {
             get_all_settings,
             detect_agents,
             get_git_status,
+            get_worktree_diff,
             create_worktree,
             remove_worktree,
             list_branches,

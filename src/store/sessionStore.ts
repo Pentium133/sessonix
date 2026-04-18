@@ -16,6 +16,10 @@ import { writeToTerminal } from "../lib/terminalPool";
 import { useProjectStore } from "./projectStore";
 import type { AgentType, GitStatus, Session, SessionStatus } from "../lib/types";
 
+/// Reserved pty-id for the Diff pseudo-session. Real PTY ids always ≥ 1
+/// (see `SessionManager::new` — `max_pty_id + 1`), so `0` is safe.
+export const DIFF_PSEUDO_ID = 0;
+
 interface SessionState {
   sessions: Session[];
   activeSessionId: number | null;

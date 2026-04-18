@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useSessionStore } from "../store/sessionStore";
+import { useSessionStore, DIFF_PSEUDO_ID } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import { useUiStore } from "../store/uiStore";
 
@@ -79,9 +79,18 @@ export function useGlobalShortcuts() {
         ui.zoomOut();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === "0") {
+      // Cmd+Shift+0 — reset zoom (moved from Cmd+0 which is now the Diff
+      // pseudo-session shortcut).
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "0") {
         e.preventDefault();
         ui.resetZoom();
+        return;
+      }
+      // Cmd+0 — switch to the Diff pseudo-session for the active project.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "0") {
+        if (!pStore.activeProjectPath) return;
+        e.preventDefault();
+        sStore.switchSession(DIFF_PSEUDO_ID);
         return;
       }
       // Ctrl+1-9 — switch projects by index

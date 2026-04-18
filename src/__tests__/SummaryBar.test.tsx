@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import SummaryBar from "../components/SummaryBar";
-import { useSessionStore } from "../store/sessionStore";
+import { useSessionStore, DIFF_PSEUDO_ID } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import type { Session } from "../lib/types";
 
@@ -37,17 +37,28 @@ describe("SummaryBar", () => {
     useSessionStore.setState({ sessions: [], activeSessionId: null, loaded: true });
   });
 
-  it("renders nothing when there are no sessions", () => {
+  it("renders only the Diff button when there are no sessions", () => {
     setStore([]);
     const { container } = render(<SummaryBar />);
-    expect(container.firstChild).toBeNull();
+    // Bar is present, and the only tab is the Diff pseudo-session.
+    expect(container.querySelector(".summary-bar")).toBeTruthy();
+    expect(container.querySelectorAll(".summary-item")).toHaveLength(1);
+    expect(screen.getByLabelText("Show diff")).toBeTruthy();
   });
 
-  it("renders nothing when all sessions are exited", () => {
+  it("renders only the Diff button when all sessions are exited", () => {
     setStore([
       makeSession({ id: 1, status: "exited" }),
       makeSession({ id: 2, status: "error" }),
     ]);
+    const { container } = render(<SummaryBar />);
+    expect(container.querySelectorAll(".summary-item")).toHaveLength(1);
+    expect(screen.getByLabelText("Show diff")).toBeTruthy();
+  });
+
+  it("returns null when there is no active project", () => {
+    useSessionStore.setState({ sessions: [], activeSessionId: null });
+    useProjectStore.setState({ activeProjectPath: null });
     const { container } = render(<SummaryBar />);
     expect(container.firstChild).toBeNull();
   });
@@ -89,17 +100,19 @@ describe("SummaryBar", () => {
     expect(container.querySelectorAll(".summary-item.active")).toHaveLength(0);
   });
 
-  it("does not apply active class to inactive tabs", () => {
+  it("does not apply active class to inactive session tabs", () => {
     setStore([
       makeSession({ id: 1, task_name: "Active" }),
       makeSession({ id: 2, task_name: "Inactive", sortOrder: 2 }),
     ], 1);
     const { container } = render(<SummaryBar />);
-    const inactiveButtons = container.querySelectorAll(
-      ".summary-item:not(.active)"
+    // Inactive session tabs + Diff button (both non-active). Scope by excluding
+    // the Diff button via class for this assertion.
+    const inactiveSessionButtons = container.querySelectorAll(
+      ".summary-item:not(.active):not(.summary-diff-btn)"
     );
-    expect(inactiveButtons).toHaveLength(1);
-    expect(inactiveButtons[0].textContent).toContain("Inactive");
+    expect(inactiveSessionButtons).toHaveLength(1);
+    expect(inactiveSessionButtons[0].textContent).toContain("Inactive");
   });
 
   it("calls switchSession with the session id when a tab is clicked", () => {
@@ -153,5 +166,39 @@ describe("SummaryBar", () => {
     render(<SummaryBar />);
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.queryByText("Dead")).toBeNull();
+  });
+
+  describe("Diff pseudo-session button", () => {
+    it("is visible with zero running sessions", () => {
+      setStore([]);
+      render(<SummaryBar />);
+      expect(screen.getByLabelText("Show diff")).toBeTruthy();
+    });
+
+    it("calls switchSession(DIFF_PSEUDO_ID) when clicked", () => {
+      const switchSession = vi.fn();
+      setStore([]);
+      useSessionStore.setState({ switchSession });
+      render(<SummaryBar />);
+      fireEvent.click(screen.getByLabelText("Show diff"));
+      expect(switchSession).toHaveBeenCalledWith(DIFF_PSEUDO_ID);
+    });
+
+    it("gets the active class when activeSessionId is the pseudo-id", () => {
+      setStore([], DIFF_PSEUDO_ID);
+      const { container } = render(<SummaryBar />);
+      const btn = container.querySelector(".summary-diff-btn");
+      expect(btn?.classList.contains("active")).toBe(true);
+    });
+
+    it("is rendered after all session tabs (rightmost)", () => {
+      setStore([
+        makeSession({ id: 1, task_name: "First" }),
+        makeSession({ id: 2, task_name: "Second", sortOrder: 2 }),
+      ]);
+      const { container } = render(<SummaryBar />);
+      const items = container.querySelectorAll(".summary-item");
+      expect(items[items.length - 1].classList.contains("summary-diff-btn")).toBe(true);
+    });
   });
 });

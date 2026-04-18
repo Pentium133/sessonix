@@ -1,0 +1,32 @@
+{
+  "name": "tessl-labs/spec-driven-development",
+  "version": "2.0.1",
+  "summary": "Spec-driven workflow covering requirement gathering, spec authoring, implementation review, and verification — with skills, rules, and evaluation scenarios.",
+  "private": false,
+  "docs": "docs/index.md",
+  "skills": {
+    "requirement-gathering": {
+      "path": "skills/requirement-gathering/SKILL.md"
+    },
+    "spec-writer": {
+      "path": "skills/spec-writer/SKILL.md"
+    },
+    "spec-verification": {
+      "path": "skills/spec-verification/SKILL.md"
+    },
+    "work-review": {
+      "path": "skills/work-review/SKILL.md"
+    }
+  },
+  "rules": {
+    "spec-before-code": {
+      "rules": "rules/spec-before-code.md"
+    },
+    "one-question-at-a-time": {
+      "rules": "rules/one-question-at-a-time.md"
+    },
+    "spec-format-compliance": {
+      "rules": "rules/spec-format-compliance.md"
+    }
+  }
+}
