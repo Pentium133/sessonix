@@ -7,6 +7,7 @@ import ProjectRail from "./components/ProjectRail";
 import Sidebar from "./components/Sidebar";
 import SummaryBar from "./components/SummaryBar";
 import TerminalPane from "./components/TerminalPane";
+import DiffViewer from "./components/DiffViewer";
 import StatusBar from "./components/StatusBar";
 import SessionLauncher from "./components/SessionLauncher";
 import SettingsModal from "./components/SettingsModal";
@@ -17,7 +18,7 @@ import { usePtyOutput } from "./hooks/usePtyOutput";
 import { useStatusPolling } from "./hooks/useStatusPolling";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import type { AgentType } from "./lib/types";
-import { useSessionStore } from "./store/sessionStore";
+import { useSessionStore, DIFF_PSEUDO_ID } from "./store/sessionStore";
 import { useProjectStore } from "./store/projectStore";
 import { useTaskStore } from "./store/taskStore";
 import { useUiStore, initUi } from "./store/uiStore";
@@ -270,17 +271,25 @@ function App() {
                 &nbsp;&middot;&nbsp;
                 <kbd>Cmd+Shift+T</kbd> new session
                 &nbsp;&middot;&nbsp;
+                <kbd>Cmd+0</kbd> diff
+                &nbsp;&middot;&nbsp;
                 <kbd>Ctrl+1–9</kbd> switch projects
               </p>
             </div>
           ) : null}
-          <ErrorBoundary>
-            <TerminalPane
-              activeSessionId={activeSessionId}
-              sessionIds={sessionIds}
-              isActiveSessionExited={isActiveSessionExited}
-            />
-          </ErrorBoundary>
+          {activeSessionId === DIFF_PSEUDO_ID ? (
+            <ErrorBoundary>
+              <DiffViewer />
+            </ErrorBoundary>
+          ) : (
+            <ErrorBoundary>
+              <TerminalPane
+                activeSessionId={activeSessionId}
+                sessionIds={sessionIds}
+                isActiveSessionExited={isActiveSessionExited}
+              />
+            </ErrorBoundary>
+          )}
         </div>
       </div>
       <StatusBar />

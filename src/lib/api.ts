@@ -293,6 +293,36 @@ export async function deleteTask(taskId: number): Promise<DeleteTaskResult> {
   return invoke<DeleteTaskResult>("delete_task", { taskId });
 }
 
+// --- Worktree diff ---
+
+export type DiffStatus = "added" | "modified" | "deleted" | "renamed";
+
+export type DiffPayload =
+  | { kind: "text"; oldContent: string; newContent: string }
+  | { kind: "binary" }
+  | { kind: "tooLarge"; sizeBytes: number };
+
+export interface DiffFile {
+  oldPath: string;
+  newPath: string;
+  status: DiffStatus;
+  additions: number;
+  deletions: number;
+  payload: DiffPayload;
+}
+
+export interface WorktreeDiff {
+  isRepo: boolean;
+  branch: string | null;
+  headSha: string | null;
+  files: DiffFile[];
+  truncatedFiles: number;
+}
+
+export async function getWorktreeDiff(workingDir: string): Promise<WorktreeDiff> {
+  return invoke<WorktreeDiff>("get_worktree_diff", { workingDir });
+}
+
 // --- Updates ---
 
 export interface UpdateInfo {
