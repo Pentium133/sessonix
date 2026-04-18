@@ -212,6 +212,24 @@ Two-column flex layout:
 - Pressing `Cmd+0` with no active project is a no-op.
   `[@test] ../src/__tests__/App.keyboard.test.tsx::test_cmd_0_noop_without_project`
 
+## Persistence of terminal state across Diff switches
+
+`TerminalPane` stays mounted for the entire lifetime of the content area and uses `display:none` to hide itself while the Diff pseudo-session is active. It is **never conditionally unmounted** based on `activeSessionId`, because unmounting the pane destroys the container div that xterm instances in `terminalPool` were `terminal.open()`-ed against — subsequent remount leaves those instances orphaned (no visible DOM, empty terminal on return from Diff). This applies uniformly to every agent type (shell, Claude, Codex, Gemini, custom): the pool is agent-agnostic, the fix protects all of them.
+
+- `TerminalPane` is rendered unconditionally as a sibling of `DiffViewer` in `App.tsx`; only its `display` CSS property toggles based on whether `activeSessionId === DIFF_PSEUDO_ID`. `DiffViewer` itself may still be conditionally rendered — it holds no expensive state.
+  `[@test] ../src/__tests__/App.diff-switch.test.tsx::test_terminal_pane_always_mounted`
+- Switching from any real session to the Diff pseudo-session and back restores the terminal's on-screen contents (scrollback, cursor position, PTY output buffered via `ring_buffer` during detach) identically to switching between two real sessions.
+  `[@test] ../src/__tests__/App.diff-switch.test.tsx::test_terminal_persists_across_diff_switch`
+
+## Session launch updates last-focused tracking
+
+When `sessionStore.addSession` creates a new session (fresh launch or relaunch with `replaceId`) and promotes it to `activeSessionId`, it must also write `lastActiveSession[working_dir] = newId` on `projectStore` — mirroring what `switchSession` already does for existing sessions. Without this write, the Diff pseudo-session cannot resolve the worktree of a freshly-launched task session: `resolveWorkingDir` in `DiffViewer` falls back to `activeProjectPath` (the main checkout) and renders a diff of the wrong branch.
+
+- After `addSession` resolves, `useProjectStore.getState().lastActiveSession[working_dir]` equals the new session id.
+  `[@test] ../src/__tests__/sessionStore.addSession.test.ts::test_addSession_writes_lastActive`
+- Switching to Diff immediately after launching a worktree-backed session targets `session.worktree_path`, not the project root.
+  `[@test] ../src/__tests__/DiffViewer.target-resolution.test.tsx::test_targets_worktree_after_launch`
+
 ## Error handling
 
 - All `git2` errors surface as `Result::Err(String)` from the IPC command and are rendered in the `DiffViewer` error state (no toast).

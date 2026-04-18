@@ -277,17 +277,17 @@ function App() {
               </p>
             </div>
           ) : null}
-          {activeSessionId === DIFF_PSEUDO_ID ? (
+          <ErrorBoundary>
+            <TerminalPane
+              activeSessionId={activeSessionId}
+              sessionIds={sessionIds}
+              isActiveSessionExited={isActiveSessionExited}
+              hidden={activeSessionId === DIFF_PSEUDO_ID}
+            />
+          </ErrorBoundary>
+          {activeSessionId === DIFF_PSEUDO_ID && (
             <ErrorBoundary>
               <DiffViewer />
-            </ErrorBoundary>
-          ) : (
-            <ErrorBoundary>
-              <TerminalPane
-                activeSessionId={activeSessionId}
-                sessionIds={sessionIds}
-                isActiveSessionExited={isActiveSessionExited}
-              />
             </ErrorBoundary>
           )}
         </div>

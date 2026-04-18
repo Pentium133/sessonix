@@ -33,6 +33,7 @@ interface TerminalPaneProps {
   activeSessionId: number | null;
   sessionIds: number[];
   isActiveSessionExited?: boolean;
+  hidden?: boolean;
 }
 
 function evictLRU(keepId: number, containerEl?: HTMLDivElement | null) {
@@ -62,6 +63,7 @@ export default function TerminalPane({
   activeSessionId,
   sessionIds,
   isActiveSessionExited,
+  hidden = false,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalFontSize = useSettingsStore((s) => s.terminalFontSize);
@@ -284,7 +286,7 @@ export default function TerminalPane({
         flex: 1,
         position: "relative",
         overflow: "hidden",
-        display: activeSessionId !== null ? "block" : "none",
+        display: activeSessionId !== null && !hidden ? "block" : "none",
       }}
     />
   );

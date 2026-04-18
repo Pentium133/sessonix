@@ -250,6 +250,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     projectStore.setActiveProjectPath(params.working_dir);
+    projectStore.setLastActiveSession(params.working_dir, id);
     return id;
   },
 
