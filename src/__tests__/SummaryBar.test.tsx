@@ -49,11 +49,25 @@ describe("SummaryBar", () => {
   it("renders only the Diff button when all sessions are exited", () => {
     setStore([
       makeSession({ id: 1, status: "exited" }),
-      makeSession({ id: 2, status: "error" }),
+      makeSession({ id: 2, status: "exited", sortOrder: 2 }),
     ]);
     const { container } = render(<SummaryBar />);
     expect(container.querySelectorAll(".summary-item")).toHaveLength(1);
     expect(screen.getByLabelText("Show diff")).toBeTruthy();
+  });
+
+  it("keeps errored sessions visible — only exited are hidden", () => {
+    // Regression: Claude adapter transiently flips to "error" on any "error"
+    // substring in output, which used to drop the tab until the next poll.
+    setStore([
+      makeSession({ id: 1, task_name: "Working", status: "running" }),
+      makeSession({ id: 2, task_name: "Transient", status: "error", sortOrder: 2 }),
+      makeSession({ id: 3, task_name: "Gone", status: "exited", sortOrder: 3 }),
+    ]);
+    render(<SummaryBar />);
+    expect(screen.getByText("Working")).toBeTruthy();
+    expect(screen.getByText("Transient")).toBeTruthy();
+    expect(screen.queryByText("Gone")).toBeNull();
   });
 
   it("returns null when there is no active project", () => {
