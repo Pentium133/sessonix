@@ -3965,6 +3965,7 @@ name = "sessonix"
 version = "0.11.0"
 dependencies = [
  "dirs 5.0.1",
+ "dunce",
  "env_logger",
  "fix-path-env",
  "git2",
