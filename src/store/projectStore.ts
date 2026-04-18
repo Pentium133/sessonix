@@ -23,6 +23,7 @@ interface ProjectState {
   setProjects: (projects: Project[]) => void;
   setActiveProjectPath: (path: string | null) => void;
   setLastActiveSession: (path: string, sessionId: number) => void;
+  clearLastActiveSession: (path: string) => void;
 
   // CRUD
   addProject: (path: string) => Promise<void>;
@@ -51,6 +52,14 @@ export const useProjectStore = create<ProjectState>()(
     set((state) => ({
       lastActiveSession: { ...state.lastActiveSession, [path]: sessionId },
     })),
+
+  clearLastActiveSession: (path) =>
+    set((state) => {
+      if (!(path in state.lastActiveSession)) return state;
+      const next = { ...state.lastActiveSession };
+      delete next[path];
+      return { lastActiveSession: next };
+    }),
 
   addProject: async (path) => {
     const name = projectName(path);

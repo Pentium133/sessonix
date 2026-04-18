@@ -8,12 +8,11 @@ export default function SummaryBar() {
   const switchSession = useSessionStore((s) => s.switchSession);
   const activeProjectPath = useProjectStore((s) => s.activeProjectPath);
 
+  // Show every non-exited session. Transient statuses like `error` used to
+  // drop the tab out of the bar until the next poll tick repaired it, which
+  // looked like the tab vanishing mid-work.
   const running = sessions
-    .filter(
-      (s) =>
-        s.working_dir === activeProjectPath &&
-        (s.status === "running" || s.status === "idle")
-    )
+    .filter((s) => s.working_dir === activeProjectPath && s.status !== "exited")
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const MAX_VISIBLE = 5;

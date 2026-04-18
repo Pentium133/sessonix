@@ -123,8 +123,10 @@ interface SessionStore {
   `[@test] ../src/__tests__/sessionStore.diff-pseudo.test.ts::test_reserved_id`
 - When `switchSession(id)` is called with a real session id inside an active project, the store records `lastFocusedSessionIdByProject[activeProjectPath] = id` **before** updating `activeSessionId`.
   `[@test] ../src/__tests__/sessionStore.diff-pseudo.test.ts::test_last_focused_tracked`
-- When `switchSession(DIFF_PSEUDO_ID)` is called, `activeSessionId` becomes `0`; nothing is written to `lastFocusedSessionIdByProject`.
+- When `switchSession(DIFF_PSEUDO_ID)` is called, `activeSessionId` becomes `0`; the *outgoing* real session (if any) is snapshotted into `lastActiveSession[working_dir]` so `DiffViewer` can still resolve its worktree after the switch. Switching with no outgoing session leaves the map untouched.
   `[@test] ../src/__tests__/sessionStore.diff-pseudo.test.ts::test_switch_to_diff`
+- When `removeSession` promotes a sibling to `activeSessionId`, `lastActiveSession[working_dir]` is updated to the promoted id; when no sibling remains, the entry is cleared. Without this, a stale id points at a deleted session and `DiffViewer` falls back to the project root (renders the main-branch diff).
+  `[@test] ../src/__tests__/sessionStore.test.ts::removeSession > updates lastActiveSession to the promoted sibling`
 
 ## UI: SummaryBar — Diff button
 
