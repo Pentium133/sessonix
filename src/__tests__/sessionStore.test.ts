@@ -140,6 +140,33 @@ describe("sessionStore", () => {
       // id=2 is in a different project, should NOT be selected
       expect(useSessionStore.getState().activeSessionId).toBeNull();
     });
+
+    it("updates lastActiveSession to the promoted sibling", async () => {
+      // Regression: stale lastActiveSession made DiffViewer fall through to
+      // activeProjectPath (main branch) instead of the promoted worktree session.
+      seedSessions([
+        makeSession({ id: 1, sortOrder: 2, status: "running" }),
+        makeSession({ id: 2, sortOrder: 1, status: "running", worktree_path: "/tmp/app/.wt/feat" }),
+      ], 1);
+      seedProject("/tmp/app", [1, 2]);
+      useProjectStore.setState({ lastActiveSession: { "/tmp/app": 1 } });
+
+      await useSessionStore.getState().removeSession(1);
+
+      expect(useSessionStore.getState().activeSessionId).toBe(2);
+      expect(useProjectStore.getState().lastActiveSession).toEqual({ "/tmp/app": 2 });
+    });
+
+    it("clears lastActiveSession when no sibling remains", async () => {
+      seedSessions([makeSession({ id: 1, status: "running" })], 1);
+      seedProject("/tmp/app", [1]);
+      useProjectStore.setState({ lastActiveSession: { "/tmp/app": 1 } });
+
+      await useSessionStore.getState().removeSession(1);
+
+      expect(useSessionStore.getState().activeSessionId).toBeNull();
+      expect(useProjectStore.getState().lastActiveSession).toEqual({});
+    });
   });
 
   // ─── removeSessions (bulk) ───────────────────────────────────

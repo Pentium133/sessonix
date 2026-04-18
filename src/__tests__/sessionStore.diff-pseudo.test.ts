@@ -55,9 +55,11 @@ describe("sessionStore — Diff pseudo-session", () => {
     expect(DIFF_PSEUDO_ID).toBe(0);
   });
 
-  it("switchSession(DIFF_PSEUDO_ID) sets activeSessionId to 0 without writing lastActiveSession", async () => {
+  it("switchSession(DIFF_PSEUDO_ID) snapshots the outgoing real session into lastActiveSession", async () => {
+    // Regression: without this snapshot, DiffViewer falls back to activeProjectPath
+    // (project root) and renders the main-branch diff instead of the worktree one.
     useSessionStore.setState({
-      sessions: [makeSession({ id: 5, working_dir: "/tmp/app" })],
+      sessions: [makeSession({ id: 5, working_dir: "/tmp/app", worktree_path: "/tmp/app/.wt/feat" })],
       activeSessionId: 5,
       loaded: true,
     });
@@ -70,9 +72,23 @@ describe("sessionStore — Diff pseudo-session", () => {
     await useSessionStore.getState().switchSession(DIFF_PSEUDO_ID);
 
     expect(useSessionStore.getState().activeSessionId).toBe(DIFF_PSEUDO_ID);
-    expect(useProjectStore.getState().lastActiveSession).toEqual({});
+    expect(useProjectStore.getState().lastActiveSession).toEqual({ "/tmp/app": 5 });
     expect(api.attachSession).not.toHaveBeenCalled();
     expect(api.detachSession).toHaveBeenCalledWith(5);
+  });
+
+  it("switchSession(DIFF_PSEUDO_ID) skips the snapshot when there is no outgoing session", async () => {
+    useSessionStore.setState({ sessions: [], activeSessionId: null, loaded: true });
+    useProjectStore.setState({
+      projects: [{ path: "/tmp/app", name: "app", sessions: [] }],
+      activeProjectPath: "/tmp/app",
+      lastActiveSession: {},
+    });
+
+    await useSessionStore.getState().switchSession(DIFF_PSEUDO_ID);
+
+    expect(useSessionStore.getState().activeSessionId).toBe(DIFF_PSEUDO_ID);
+    expect(useProjectStore.getState().lastActiveSession).toEqual({});
   });
 
   it("switchSession to a real session after diff records lastActiveSession", async () => {
