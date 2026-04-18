@@ -1190,9 +1190,20 @@ mod update_tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.sessonix.app");
+    let app_dir = if cfg!(debug_assertions) {
+        // Dev builds keep state beside the repo so it stays isolated from the
+        // shipped app's data directory and can be wiped with a single rm.
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or(manifest)
+            .join(".dev-data")
+    } else {
+        dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("com.sessonix.app")
+    };
 
     let db = match db::Db::open(&app_dir) {
         Ok(db) => Arc::new(db),

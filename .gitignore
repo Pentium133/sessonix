@@ -23,5 +23,8 @@ Thumbs.db
 .gstack/
 .sessonix-worktrees/
 
+# Dev-only app state (SQLite db for `npm run tauri dev`)
+.dev-data/
+
 # Project management (local only)
 pm/
