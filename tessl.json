@@ -1,0 +1,9 @@
+{
+  "name": "feat-git-diff",
+  "mode": "vendored",
+  "dependencies": {
+    "tessl-labs/spec-driven-development": {
+      "version": "2.0.1"
+    }
+  }
+}
