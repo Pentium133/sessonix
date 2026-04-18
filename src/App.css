@@ -263,11 +263,13 @@ body {
 }
 
 .sidebar-header {
-  padding: calc(var(--space) * 3) calc(var(--space) * 4);
+  height: 44px;
+  padding: 0 calc(var(--space) * 4);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: calc(var(--space) * 2);
+  flex-shrink: 0;
 }
 
 .sidebar-header h2 {
