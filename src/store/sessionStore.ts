@@ -266,8 +266,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     // Compute sibling selection inside set() to use the latest state snapshot
-    // (avoid stale reads from before the async kill/delete calls above)
-    let promotedForPath: { path: string; nextId: number | null } | null = null;
+    // (avoid stale reads from before the async kill/delete calls above).
+    // `promoted` is filled by the callback; the ref wrapper lets TS narrow
+    // across the closure boundary.
+    const promoted: { value: { path: string; nextId: number | null } | null } = { value: null };
     set((state) => {
       const removedSession = state.sessions.find((s) => s.id === id);
       let nextActiveId = state.activeSessionId;
@@ -276,24 +278,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           .filter((s) => s.working_dir === removedSession.working_dir && s.id !== id)
           .sort((a, b) => a.sortOrder - b.sortOrder);
         nextActiveId = siblings.length > 0 ? siblings[0].id : null;
-        promotedForPath = { path: removedSession.working_dir, nextId: nextActiveId };
+        promoted.value = { path: removedSession.working_dir, nextId: nextActiveId };
       }
       return {
         sessions: state.sessions.filter((s) => s.id !== id),
         activeSessionId: nextActiveId,
       };
     });
+
     const projectStore = useProjectStore.getState();
     projectStore.removeSessionFromProject(id);
     // Keep lastActiveSession in sync: stale ids make DiffViewer fall back to
     // the project root (showing main instead of the promoted worktree).
-    if (promotedForPath) {
-      const { path, nextId } = promotedForPath as { path: string; nextId: number | null };
-      if (nextId !== null) {
-        projectStore.setLastActiveSession(path, nextId);
-      } else {
-        projectStore.clearLastActiveSession(path);
-      }
+    if (promoted.value) {
+      const { path, nextId } = promoted.value;
+      if (nextId !== null) projectStore.setLastActiveSession(path, nextId);
+      else projectStore.clearLastActiveSession(path);
     }
   },
 
@@ -317,7 +317,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // Detach current
     if (currentSession && currentSession.status !== "exited") {
-      await detachSession(activeSessionId!).catch(console.error);
+      await detachSession(currentSession.id).catch(console.error);
     }
 
     // Attach target
