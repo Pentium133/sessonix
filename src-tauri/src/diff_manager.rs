@@ -176,9 +176,17 @@ pub fn get_worktree_diff(working_dir: &str) -> Result<WorktreeDiff, String> {
             continue;
         }
 
+        // git2 reports blob size accurately for tracked files, but for untracked
+        // files `size()` can be 0 since no blob exists yet — so we also probe
+        // the workdir file on disk before reading it into memory.
         let old_blob_size = delta.old_file().size();
         let new_blob_size = delta.new_file().size();
-        let max_size = old_blob_size.max(new_blob_size);
+        let new_fs_size = delta
+            .new_file()
+            .path()
+            .map(|p| std::fs::metadata(workdir.join(p)).map(|m| m.len()).unwrap_or(0))
+            .unwrap_or(0);
+        let max_size = old_blob_size.max(new_blob_size).max(new_fs_size);
         if max_size > MAX_FILE_BYTES {
             files.push(DiffFile {
                 old_path,
@@ -484,6 +492,29 @@ mod tests {
         // 1.5 MB text file, exceeds MAX_FILE_BYTES.
         let big = "line\n".repeat(300_000);
         fs::write(tmp.path().join("big.txt"), &big).unwrap();
+
+        let diff = get_worktree_diff(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(diff.files.len(), 1);
+        match &diff.files[0].payload {
+            DiffPayload::TooLarge { size_bytes } => {
+                assert!(*size_bytes > MAX_FILE_BYTES);
+            }
+            other => panic!("expected TooLarge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_large_untracked_file_stub_uses_fs_metadata() {
+        // Regression: previously the untracked path was classified by git2's
+        // `DiffFile::size()`, which can be 0 for untracked entries — that let
+        // multi-megabyte ASCII logs slip past the byte cap and get read fully
+        // into memory before the line-count filter caught them. Now we probe
+        // `fs::metadata` on the workdir path as a fallback.
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo_with_commit(tmp.path());
+        // 2 MB of a single line to avoid tripping the line-count limit.
+        let payload = "x".repeat(2 * 1024 * 1024);
+        fs::write(tmp.path().join("huge.log"), &payload).unwrap();
 
         let diff = get_worktree_diff(tmp.path().to_str().unwrap()).unwrap();
         assert_eq!(diff.files.len(), 1);

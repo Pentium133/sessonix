@@ -54,6 +54,8 @@ pub struct DiffFile {
     pub old_path: String,                  // "" when status == Added
     pub new_path: String,                  // "" when status == Deleted
     pub status: DiffStatus,
+    pub additions: u32,                    // hunk line counts (`git diff` stats)
+    pub deletions: u32,
     pub payload: DiffPayload,
 }
 
@@ -76,6 +78,8 @@ Implementation uses `git2::Repository::discover` + `diff_index_to_workdir` with 
 ## Diff computation rules
 
 - Base = `HEAD`. Target = working tree (includes staged + unstaged + untracked).
+  `[@test] ../src-tauri/src/diff_manager.rs::test_modified_file`
+- Each `DiffFile` reports per-file hunk line stats: `additions` (lines added, `+`) and `deletions` (lines removed, `−`), derived from `git2::Patch::line_stats()`. Binary and too-large files still carry whatever stats git2 produced (may be zero). The file list UI renders these alongside the path.
   `[@test] ../src-tauri/src/diff_manager.rs::test_modified_file`
 - A directory that is not a git repo (no parent `.git`) returns `WorktreeDiff { is_repo: false, .. }` with `files` empty.
   `[@test] ../src-tauri/src/diff_manager.rs::test_non_git_dir`
