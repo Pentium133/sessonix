@@ -3,14 +3,18 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use parking_lot::Mutex;
 use log::{info, warn};
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow, WindowEvent};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const FILE_NAME: &str = "window_state.json";
 pub const MIN_WIDTH: u32 = 900;
 pub const MIN_HEIGHT: u32 = 600;
-#[allow(dead_code)]
 pub const DEBOUNCE_MS: u64 = 500;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -56,7 +60,6 @@ pub fn read_state(path: &Path) -> Option<WindowState> {
     Some(state)
 }
 
-#[allow(dead_code)]
 pub fn write_state_atomic(path: &Path, state: &WindowState) -> io::Result<()> {
     let tmp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(state)
@@ -196,6 +199,96 @@ pub fn restore(window: &WebviewWindow) {
     if let Err(e) = window.set_position(LogicalPosition::new(rect.x, rect.y)) {
         warn!("window_state: set_position failed: {e}");
     }
+}
+
+fn capture_snapshot(window: &WebviewWindow) -> Option<WindowState> {
+    if window.is_minimized().unwrap_or(false) {
+        return None;
+    }
+    let position = window.outer_position().ok()?;
+    let size = window.inner_size().ok()?;
+    if size.width == 0 || size.height == 0 {
+        return None;
+    }
+    let monitor = window.current_monitor().ok().flatten()?;
+    let sf = monitor.scale_factor();
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+
+    Some(WindowState {
+        version: SCHEMA_VERSION,
+        x: (position.x as f64 / sf).round() as i32,
+        y: (position.y as f64 / sf).round() as i32,
+        width: (size.width as f64 / sf).round() as u32,
+        height: (size.height as f64 / sf).round() as u32,
+        monitor: MonitorFingerprint {
+            x: (monitor_pos.x as f64 / sf).round() as i32,
+            y: (monitor_pos.y as f64 / sf).round() as i32,
+            width: (monitor_size.width as f64 / sf).round() as u32,
+            height: (monitor_size.height as f64 / sf).round() as u32,
+        },
+    })
+}
+
+fn debounce_worker(
+    rx: mpsc::Receiver<()>,
+    snapshot: Arc<Mutex<Option<WindowState>>>,
+    path: PathBuf,
+) {
+    loop {
+        // Block until the first signal arrives.
+        if rx.recv().is_err() {
+            return;
+        }
+        // Reset-on-event: keep draining until DEBOUNCE_MS of silence.
+        loop {
+            match rx.recv_timeout(Duration::from_millis(DEBOUNCE_MS)) {
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        let state_to_write = snapshot.lock().clone();
+        if let Some(state) = state_to_write {
+            if let Err(e) = write_state_atomic(&path, &state) {
+                warn!("window_state: debounced write failed: {e}");
+            }
+        }
+    }
+}
+
+pub fn install_auto_save(window: &WebviewWindow) {
+    let Some(path) = state_path(window) else {
+        warn!("window_state: cannot install auto-save without config dir");
+        return;
+    };
+
+    let snapshot: Arc<Mutex<Option<WindowState>>> = Arc::new(Mutex::new(None));
+    let (tx, rx) = mpsc::channel::<()>();
+
+    let worker_snapshot = Arc::clone(&snapshot);
+    let worker_path = path.clone();
+    thread::spawn(move || debounce_worker(rx, worker_snapshot, worker_path));
+
+    let listener_snapshot = Arc::clone(&snapshot);
+    let listener_path = path;
+    let window_for_events = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Resized(_) | WindowEvent::Moved(_) => {
+            if let Some(state) = capture_snapshot(&window_for_events) {
+                *listener_snapshot.lock() = Some(state);
+                let _ = tx.send(());
+            }
+        }
+        WindowEvent::CloseRequested { .. } => {
+            if let Some(state) = capture_snapshot(&window_for_events) {
+                if let Err(e) = write_state_atomic(&listener_path, &state) {
+                    warn!("window_state: close-time write failed: {e}");
+                }
+            }
+        }
+        _ => {}
+    });
 }
 
 #[cfg(test)]

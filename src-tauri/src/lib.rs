@@ -1314,6 +1314,7 @@ pub fn run() {
 
             if let Some(window) = app.get_webview_window("main") {
                 window_state::restore(&window);
+                window_state::install_auto_save(&window);
                 let _ = window.show();
             }
 
