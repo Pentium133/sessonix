@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
 use std::path::Path;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -49,6 +50,18 @@ pub fn read_state(path: &Path) -> Option<WindowState> {
         return None;
     }
     Some(state)
+}
+
+pub fn write_state_atomic(path: &Path, state: &WindowState) -> io::Result<()> {
+    let tmp_path = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&tmp_path, json)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -103,5 +116,37 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         fs::write(tmp.path(), json).unwrap();
         assert_eq!(read_state(tmp.path()), Some(state));
+    }
+
+    #[test]
+    fn atomic_write_creates_file_and_round_trips() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("window_state.json");
+        let state = sample_state();
+
+        write_state_atomic(&path, &state).expect("write ok");
+
+        assert!(path.exists(), "final file must exist");
+        let tmp_leftover = path.with_extension("json.tmp");
+        assert!(!tmp_leftover.exists(), "tmp file must be renamed away");
+
+        let reloaded = read_state(&path).expect("reread ok");
+        assert_eq!(state, reloaded);
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("window_state.json");
+
+        let first = sample_state();
+        write_state_atomic(&path, &first).unwrap();
+
+        let mut second = first.clone();
+        second.width = 2000;
+        second.height = 1200;
+        write_state_atomic(&path, &second).unwrap();
+
+        assert_eq!(read_state(&path), Some(second));
     }
 }
