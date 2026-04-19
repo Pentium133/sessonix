@@ -1,8 +1,8 @@
 # Sessonix
 
-**Agent Mission Control** — run Claude Code, Codex CLI, Gemini CLI, OpenCode and any other AI agents in parallel from a single window.
+Three Claude sessions, a Codex refactor, two Gemini experiments — spread across four repos and a dozen branches. Your terminal is a tab-cemetery, and half the agents finished hours ago.
 
-No more tab juggling. One dashboard, all your agents, every project.
+**Sessonix — Agent Mission Control** for every AI agent, every project, every branch.
 
 ![Version](https://img.shields.io/github/v/release/Pentium133/sessonix?color=green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
