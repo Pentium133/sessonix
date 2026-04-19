@@ -100,12 +100,19 @@ fn clamp_i32(value: i32, lo: i32, hi: i32) -> i32 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Case {
+    A,
+    B,
+    C,
+}
+
 pub fn compute_target_rect(
     saved: &WindowState,
     monitors: &[MonitorRect],
     primary: Option<&MonitorRect>,
     min_size: (u32, u32),
-) -> Option<Rect> {
+) -> Option<(Rect, Case)> {
     if monitors.is_empty() {
         return None;
     }
@@ -124,16 +131,21 @@ pub fn compute_target_rect(
         let max_y = m.y + (m.height - height) as i32;
         let x = clamp_i32(saved.x, m.x, max_x);
         let y = clamp_i32(saved.y, m.y, max_y);
-        return Some(Rect { x, y, width, height });
+        let rect = Rect { x, y, width, height };
+        let case = if x == saved.x && y == saved.y && width == saved.width && height == saved.height {
+            Case::A
+        } else {
+            Case::B
+        };
+        return Some((rect, case));
     }
 
-    // Case C: matched monitor gone — centre on primary.
     let p = primary?;
     let width = clamp_u32(saved.width, min_size.0, p.width);
     let height = clamp_u32(saved.height, min_size.1, p.height);
     let x = p.x + ((p.width - width) / 2) as i32;
     let y = p.y + ((p.height - height) / 2) as i32;
-    Some(Rect { x, y, width, height })
+    Some((Rect { x, y, width, height }, Case::C))
 }
 
 fn state_path(window: &WebviewWindow) -> Option<PathBuf> {
@@ -178,7 +190,7 @@ pub fn restore(window: &WebviewWindow) {
     let monitor_rects: Vec<MonitorRect> = monitors.iter().map(to_monitor_rect).collect();
     let primary_rect = primary.as_ref().map(to_monitor_rect);
 
-    let Some(rect) = compute_target_rect(
+    let Some((rect, case)) = compute_target_rect(
         &saved,
         &monitor_rects,
         primary_rect.as_ref(),
@@ -188,24 +200,8 @@ pub fn restore(window: &WebviewWindow) {
         return;
     };
 
-    let matched = monitor_rects.iter().any(|m| {
-        m.x == saved.monitor.x
-            && m.y == saved.monitor.y
-            && m.width == saved.monitor.width
-            && m.height == saved.monitor.height
-    });
-    let case = if matched {
-        let unchanged = rect.x == saved.x
-            && rect.y == saved.y
-            && rect.width == saved.width
-            && rect.height == saved.height;
-        if unchanged { 'A' } else { 'B' }
-    } else {
-        'C'
-    };
-
     info!(
-        "window_state: restore case={case} saved={:?} → applied={:?}",
+        "window_state: restore case={case:?} saved={:?} → applied={:?}",
         (saved.x, saved.y, saved.width, saved.height),
         (rect.x, rect.y, rect.width, rect.height)
     );
@@ -416,12 +412,12 @@ mod tests {
         let m = mrect(0, 0, 2560, 1440);
         let saved = saved_on(m, 240, 120, 1440, 900);
         let got = compute_target_rect(&saved, &[m], Some(&m), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 240, y: 120, width: 1440, height: 900 }));
+        assert_eq!(got, Some((Rect { x: 240, y: 120, width: 1440, height: 900 }, Case::A)));
     }
 
-    // Case B: monitor matched by fingerprint but current monitor list has different size
+    // Saved fingerprint ≠ current monitor (different size at same position) → no match → Case C
     #[test]
-    fn case_b_saved_monitor_was_bigger_window_clamped() {
+    fn saved_monitor_shrunk_falls_to_case_c() {
         let saved_monitor_fp = MonitorFingerprint { x: 0, y: 0, width: 2560, height: 1440 };
         let saved = WindowState {
             version: SCHEMA_VERSION,
@@ -430,7 +426,7 @@ mod tests {
         };
         let current = mrect(0, 0, 1440, 900);
         let got = compute_target_rect(&saved, &[current], Some(&current), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 0, y: 0, width: 1440, height: 900 }));
+        assert_eq!(got, Some((Rect { x: 0, y: 0, width: 1440, height: 900 }, Case::C)));
     }
 
     #[test]
@@ -438,7 +434,7 @@ mod tests {
         let m = mrect(0, 0, 1440, 900);
         let saved = saved_on(m, 100, 50, 2000, 800);
         let got = compute_target_rect(&saved, &[m], Some(&m), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 0, y: 50, width: 1440, height: 800 }));
+        assert_eq!(got, Some((Rect { x: 0, y: 50, width: 1440, height: 800 }, Case::B)));
     }
 
     #[test]
@@ -446,7 +442,7 @@ mod tests {
         let m = mrect(0, 0, 1920, 1080);
         let saved = saved_on(m, 5000, 0, 1280, 800);
         let got = compute_target_rect(&saved, &[m], Some(&m), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 640, y: 0, width: 1280, height: 800 }));
+        assert_eq!(got, Some((Rect { x: 640, y: 0, width: 1280, height: 800 }, Case::B)));
     }
 
     #[test]
@@ -454,7 +450,7 @@ mod tests {
         let m = mrect(-1920, 0, 1920, 1080);
         let saved = saved_on(m, -5000, 0, 1280, 800);
         let got = compute_target_rect(&saved, &[m], Some(&m), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: -1920, y: 0, width: 1280, height: 800 }));
+        assert_eq!(got, Some((Rect { x: -1920, y: 0, width: 1280, height: 800 }, Case::B)));
     }
 
     #[test]
@@ -462,7 +458,7 @@ mod tests {
         let m = mrect(0, 0, 500, 400);
         let saved = saved_on(m, 0, 0, 1280, 800);
         let got = compute_target_rect(&saved, &[m], Some(&m), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 0, y: 0, width: 500, height: 400 }));
+        assert_eq!(got, Some((Rect { x: 0, y: 0, width: 500, height: 400 }, Case::B)));
     }
 
     // Case C: saved monitor gone, centre on primary
@@ -475,7 +471,7 @@ mod tests {
         };
         let primary = mrect(0, 0, 1920, 1080);
         let got = compute_target_rect(&saved, &[primary], Some(&primary), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 240, y: 90, width: 1440, height: 900 }));
+        assert_eq!(got, Some((Rect { x: 240, y: 90, width: 1440, height: 900 }, Case::C)));
     }
 
     #[test]
@@ -487,7 +483,7 @@ mod tests {
         };
         let primary = mrect(0, 0, 1920, 1080);
         let got = compute_target_rect(&saved, &[primary], Some(&primary), MIN_SIZE);
-        assert_eq!(got, Some(Rect { x: 320, y: 140, width: 1280, height: 800 }));
+        assert_eq!(got, Some((Rect { x: 320, y: 140, width: 1280, height: 800 }, Case::C)));
     }
 
     // Case D
