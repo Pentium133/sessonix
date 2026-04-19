@@ -9,6 +9,7 @@ mod pty_manager;
 mod ring_buffer;
 mod session_manager;
 mod types;
+mod window_state;
 
 use adapters::AdapterRegistry;
 use session_manager::{CreateSessionParams, SessionManager};
