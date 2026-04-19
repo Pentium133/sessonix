@@ -188,8 +188,24 @@ pub fn restore(window: &WebviewWindow) {
         return;
     };
 
+    let matched = monitor_rects.iter().any(|m| {
+        m.x == saved.monitor.x
+            && m.y == saved.monitor.y
+            && m.width == saved.monitor.width
+            && m.height == saved.monitor.height
+    });
+    let case = if matched {
+        let unchanged = rect.x == saved.x
+            && rect.y == saved.y
+            && rect.width == saved.width
+            && rect.height == saved.height;
+        if unchanged { 'A' } else { 'B' }
+    } else {
+        'C'
+    };
+
     info!(
-        "window_state: restore saved={:?} → applied={:?}",
+        "window_state: restore case={case} saved={:?} → applied={:?}",
         (saved.x, saved.y, saved.width, saved.height),
         (rect.x, rect.y, rect.width, rect.height)
     );
