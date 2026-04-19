@@ -2,19 +2,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::path::PathBuf;
+use log::{info, warn};
+use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
-#[allow(dead_code)]
 pub const SCHEMA_VERSION: u32 = 1;
-#[allow(dead_code)]
 pub const FILE_NAME: &str = "window_state.json";
-#[allow(dead_code)]
 pub const MIN_WIDTH: u32 = 900;
-#[allow(dead_code)]
 pub const MIN_HEIGHT: u32 = 600;
 #[allow(dead_code)]
 pub const DEBOUNCE_MS: u64 = 500;
 
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct WindowState {
     pub version: u32,
@@ -25,7 +23,6 @@ pub struct WindowState {
     pub monitor: MonitorFingerprint,
 }
 
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct MonitorFingerprint {
     pub x: i32,
@@ -34,7 +31,6 @@ pub struct MonitorFingerprint {
     pub height: u32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -43,7 +39,6 @@ pub struct Rect {
     pub height: u32,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonitorRect {
     pub x: i32,
@@ -52,7 +47,6 @@ pub struct MonitorRect {
     pub height: u32,
 }
 
-#[allow(dead_code)]
 pub fn read_state(path: &Path) -> Option<WindowState> {
     let data = fs::read_to_string(path).ok()?;
     let state: WindowState = serde_json::from_str(&data).ok()?;
@@ -75,7 +69,6 @@ pub fn write_state_atomic(path: &Path, state: &WindowState) -> io::Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 fn clamp_u32(value: u32, lo: u32, hi: u32) -> u32 {
     // If hi < lo (monitor smaller than min_size), prefer hi so the window
     // still fits on-screen. Spec: "tiny monitor" corner case in Case B.
@@ -91,7 +84,6 @@ fn clamp_u32(value: u32, lo: u32, hi: u32) -> u32 {
     }
 }
 
-#[allow(dead_code)]
 fn clamp_i32(value: i32, lo: i32, hi: i32) -> i32 {
     if hi < lo {
         return lo;
@@ -105,7 +97,6 @@ fn clamp_i32(value: i32, lo: i32, hi: i32) -> i32 {
     }
 }
 
-#[allow(dead_code)]
 pub fn compute_target_rect(
     saved: &WindowState,
     monitors: &[MonitorRect],
@@ -140,6 +131,71 @@ pub fn compute_target_rect(
     let x = p.x + ((p.width - width) / 2) as i32;
     let y = p.y + ((p.height - height) / 2) as i32;
     Some(Rect { x, y, width, height })
+}
+
+fn state_path(window: &WebviewWindow) -> Option<PathBuf> {
+    window
+        .app_handle()
+        .path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join(FILE_NAME))
+}
+
+fn to_monitor_rect(monitor: &tauri::Monitor) -> MonitorRect {
+    let sf = monitor.scale_factor();
+    let pos = monitor.position();
+    let size = monitor.size();
+    MonitorRect {
+        x: (pos.x as f64 / sf).round() as i32,
+        y: (pos.y as f64 / sf).round() as i32,
+        width: (size.width as f64 / sf).round() as u32,
+        height: (size.height as f64 / sf).round() as u32,
+    }
+}
+
+pub fn restore(window: &WebviewWindow) {
+    let Some(path) = state_path(window) else {
+        warn!("window_state: cannot resolve config dir, skipping restore");
+        return;
+    };
+    let Some(saved) = read_state(&path) else {
+        info!("window_state: no saved state, using defaults");
+        return;
+    };
+    let monitors = match window.available_monitors() {
+        Ok(list) => list,
+        Err(e) => {
+            warn!("window_state: failed to enumerate monitors: {e}");
+            return;
+        }
+    };
+    let primary = window.primary_monitor().ok().flatten();
+
+    let monitor_rects: Vec<MonitorRect> = monitors.iter().map(to_monitor_rect).collect();
+    let primary_rect = primary.as_ref().map(to_monitor_rect);
+
+    let Some(rect) = compute_target_rect(
+        &saved,
+        &monitor_rects,
+        primary_rect.as_ref(),
+        (MIN_WIDTH, MIN_HEIGHT),
+    ) else {
+        warn!("window_state: no monitors available, using defaults");
+        return;
+    };
+
+    info!(
+        "window_state: restore saved={:?} → applied={:?}",
+        (saved.x, saved.y, saved.width, saved.height),
+        (rect.x, rect.y, rect.width, rect.height)
+    );
+    if let Err(e) = window.set_size(LogicalSize::new(rect.width, rect.height)) {
+        warn!("window_state: set_size failed: {e}");
+    }
+    if let Err(e) = window.set_position(LogicalPosition::new(rect.x, rect.y)) {
+        warn!("window_state: set_position failed: {e}");
+    }
 }
 
 #[cfg(test)]
