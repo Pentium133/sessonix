@@ -1238,13 +1238,14 @@ pub fn run() {
         }
     };
 
+    let window_state_dir = app_dir.clone();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(SessionManager::new(db))
         .manage(AdapterRegistry::new())
-        .setup(|app| {
+        .setup(move |app| {
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
             use tauri::menu::*;
 
@@ -1313,8 +1314,8 @@ pub fn run() {
             });
 
             if let Some(window) = app.get_webview_window("main") {
-                window_state::restore(&window);
-                window_state::install_auto_save(&window);
+                window_state::restore(&window, &window_state_dir);
+                window_state::install_auto_save(&window, window_state_dir.clone());
                 let _ = window.show();
             }
 

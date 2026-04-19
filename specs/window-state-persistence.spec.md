@@ -32,10 +32,15 @@ Out of scope:
 
 ### Storage location
 
-File `window_state.json` lives next to the existing SQLite database in `tauri::path::PathResolver::app_config_dir()`:
-- macOS: `~/Library/Application Support/com.sessonix.desktop/window_state.json`
-- Linux: `~/.config/com.sessonix.desktop/window_state.json`
-- Windows: `%APPDATA%\com.sessonix.desktop\window_state.json`
+File `window_state.json` lives in the same `app_dir` used for the SQLite database, which follows the existing dev/prod split in `lib.rs::run()`:
+
+- Dev (`cfg!(debug_assertions)`): `<repo>/.dev-data/window_state.json` (worktree-local, isolated from production state)
+- Prod: `<data_dir>/com.sessonix.app/window_state.json`
+  - macOS: `~/Library/Application Support/com.sessonix.app/window_state.json`
+  - Linux: `~/.local/share/com.sessonix.app/window_state.json`
+  - Windows: `%APPDATA%\com.sessonix.app\window_state.json`
+
+The module accepts `app_dir` as a parameter (same pattern as `db::Db::open`) instead of resolving the path internally, so dev/prod logic stays in one place.
 
 ### JSON schema
 
@@ -94,11 +99,11 @@ New module. Self-contained — no dependency on `session_manager`, `db`, or othe
 ```rust
 /// Read saved state (if any) and apply it to the window.
 /// Safe to call before window.show(). Never panics; logs and returns on any error.
-pub fn restore(window: &tauri::WebviewWindow);
+pub fn restore(window: &tauri::WebviewWindow, app_dir: &Path);
 
 /// Install the on-window-event listener and start the debounced save worker.
-/// Must be called once during setup.
-pub fn install_auto_save(window: &tauri::WebviewWindow);
+/// Must be called once during setup. `app_dir` is moved into the worker thread.
+pub fn install_auto_save(window: &tauri::WebviewWindow, app_dir: PathBuf);
 ```
 
 ### Internals (high level)

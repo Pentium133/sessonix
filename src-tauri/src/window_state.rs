@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 use parking_lot::Mutex;
 use log::{info, warn};
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow, WindowEvent};
+use tauri::{LogicalPosition, LogicalSize, WebviewWindow, WindowEvent};
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const FILE_NAME: &str = "window_state.json";
@@ -148,13 +148,8 @@ pub fn compute_target_rect(
     Some((Rect { x, y, width, height }, Case::C))
 }
 
-fn state_path(window: &WebviewWindow) -> Option<PathBuf> {
-    window
-        .app_handle()
-        .path()
-        .app_config_dir()
-        .ok()
-        .map(|d| d.join(FILE_NAME))
+fn state_path(app_dir: &Path) -> PathBuf {
+    app_dir.join(FILE_NAME)
 }
 
 fn to_monitor_rect(monitor: &tauri::Monitor) -> MonitorRect {
@@ -169,11 +164,8 @@ fn to_monitor_rect(monitor: &tauri::Monitor) -> MonitorRect {
     }
 }
 
-pub fn restore(window: &WebviewWindow) {
-    let Some(path) = state_path(window) else {
-        warn!("window_state: cannot resolve config dir, skipping restore");
-        return;
-    };
+pub fn restore(window: &WebviewWindow, app_dir: &Path) {
+    let path = state_path(app_dir);
     let Some(saved) = read_state(&path) else {
         info!("window_state: no saved state, using defaults");
         return;
@@ -269,11 +261,8 @@ fn debounce_worker(
     }
 }
 
-pub fn install_auto_save(window: &WebviewWindow) {
-    let Some(path) = state_path(window) else {
-        warn!("window_state: cannot install auto-save without config dir");
-        return;
-    };
+pub fn install_auto_save(window: &WebviewWindow, app_dir: PathBuf) {
+    let path = state_path(&app_dir);
 
     let snapshot: Arc<Mutex<Option<WindowState>>> = Arc::new(Mutex::new(None));
     let (tx, rx) = mpsc::channel::<()>();
