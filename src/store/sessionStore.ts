@@ -222,6 +222,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (replacedOrder > 0) {
         setSortOrder(id, replacedOrder).catch(console.error);
       }
+      // Carry the Telegram opt-in flag over to the new DB row. Inserted
+      // sessions default telegram_enabled = 0, so relaunching a bridged
+      // session would silently drop it from the bridge's sweep without this.
+      if (oldSession?.telegramEnabled) {
+        setSessionTelegramEnabled(id, true).catch(console.error);
+      }
       projectStore.replaceSessionInProject(params.working_dir, params.replaceId!, id);
     } else {
       set((state) => {
