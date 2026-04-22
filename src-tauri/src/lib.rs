@@ -8,6 +8,7 @@ mod jsonl;
 mod pty_manager;
 mod ring_buffer;
 mod session_manager;
+mod telegram_bridge;
 mod types;
 mod window_state;
 
@@ -280,6 +281,7 @@ struct SessionInfo {
     base_commit: Option<String>,
     initial_prompt: Option<String>,
     task_id: Option<i64>,
+    telegram_enabled: bool,
 }
 
 #[tauri::command]
@@ -324,6 +326,7 @@ fn list_sessions(
             base_commit: s.base_commit,
             initial_prompt: s.initial_prompt,
             task_id: s.task_id,
+            telegram_enabled: s.telegram_enabled,
         })
         .collect())
 }
@@ -382,8 +385,13 @@ fn set_sort_order(
 }
 
 #[tauri::command]
-fn notify_session_exit(state: tauri::State<'_, SessionManager>, pty_id: u32) -> Result<(), String> {
+fn notify_session_exit(
+    state: tauri::State<'_, SessionManager>,
+    bridge: tauri::State<'_, std::sync::Arc<telegram_bridge::TelegramBridge>>,
+    pty_id: u32,
+) -> Result<(), String> {
     state.on_session_exit(pty_id);
+    bridge.notify_exit(pty_id, None);
     Ok(())
 }
 
@@ -923,6 +931,61 @@ fn is_newer_version(current: &str, available: &str) -> bool {
     false
 }
 
+// --- Telegram bridge ---
+
+#[derive(serde::Serialize)]
+struct TelegramStatusDto {
+    status: String,
+    message: Option<String>,
+    owner_chat_id: Option<i64>,
+    has_token: bool,
+}
+
+#[tauri::command]
+fn get_telegram_status(
+    bridge: tauri::State<'_, std::sync::Arc<telegram_bridge::TelegramBridge>>,
+) -> Result<TelegramStatusDto, String> {
+    let (status, message) = match bridge.status() {
+        telegram_bridge::BridgeStatus::Disabled => ("disabled".to_string(), None),
+        telegram_bridge::BridgeStatus::Connecting => ("connecting".to_string(), None),
+        telegram_bridge::BridgeStatus::Polling => ("polling".to_string(), None),
+        telegram_bridge::BridgeStatus::Error { message } => ("error".to_string(), Some(message)),
+    };
+    Ok(TelegramStatusDto {
+        status,
+        message,
+        owner_chat_id: bridge.owner_chat_id(),
+        has_token: bridge.has_token(),
+    })
+}
+
+#[tauri::command]
+fn set_telegram_token(
+    bridge: tauri::State<'_, std::sync::Arc<telegram_bridge::TelegramBridge>>,
+    token: Option<String>,
+) -> Result<(), String> {
+    bridge.set_token(token)
+}
+
+#[tauri::command]
+fn reset_telegram_owner(
+    bridge: tauri::State<'_, std::sync::Arc<telegram_bridge::TelegramBridge>>,
+) -> Result<(), String> {
+    bridge.reset_owner()
+}
+
+#[tauri::command]
+fn set_session_telegram_enabled(
+    state: tauri::State<'_, SessionManager>,
+    session_id: u32,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .db
+        .set_session_telegram_enabled(session_id, enabled)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn check_for_update(force: bool) -> Result<Option<UpdateInfo>, String> {
     // Rate limit: skip if checked less than 10 minutes ago (unless forced).
@@ -1239,12 +1302,18 @@ pub fn run() {
     };
 
     let window_state_dir = app_dir.clone();
+    let session_manager = SessionManager::new(db.clone());
+    let pty_clone = session_manager.pty.clone();
+    let adapters_for_bridge = Arc::new(AdapterRegistry::new());
+    let bridge =
+        telegram_bridge::TelegramBridge::new(db.clone(), pty_clone, adapters_for_bridge);
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(SessionManager::new(db))
+        .manage(session_manager)
         .manage(AdapterRegistry::new())
+        .manage(bridge)
         .setup(move |app| {
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
             use tauri::menu::*;
@@ -1366,6 +1435,10 @@ pub fn run() {
             create_task,
             list_tasks,
             delete_task,
+            get_telegram_status,
+            set_telegram_token,
+            reset_telegram_owner,
+            set_session_telegram_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

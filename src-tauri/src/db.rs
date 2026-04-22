@@ -45,6 +45,7 @@ pub struct SessionRow {
     pub base_commit: Option<String>,
     pub initial_prompt: Option<String>,
     pub task_id: Option<i64>,
+    pub telegram_enabled: bool,
 }
 
 pub struct InsertSession<'a> {
@@ -281,6 +282,16 @@ impl Db {
             )?;
         }
 
+        // Migration: add telegram_enabled column to sessions (Telegram bridge opt-in).
+        let has_tg_col: bool = conn
+            .prepare("SELECT telegram_enabled FROM sessions LIMIT 0")
+            .is_ok();
+        if !has_tg_col {
+            conn.execute_batch(
+                "ALTER TABLE sessions ADD COLUMN telegram_enabled INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+
         // Indices for task-aware queries.
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_sessions_task_id ON sessions(task_id);
@@ -511,7 +522,8 @@ impl Db {
             "SELECT id, project_id, pty_id, agent_type, task_name, working_dir,
                     status, status_line, exit_code, launch_command, launch_args,
                     started_at, ended_at, scrollback, agent_session_id, sort_order,
-                    worktree_path, base_commit, initial_prompt, task_id
+                    worktree_path, base_commit, initial_prompt, task_id,
+                    telegram_enabled
              FROM sessions WHERE project_id = ?1 ORDER BY sort_order ASC",
         )?;
         let rows = stmt
@@ -537,6 +549,7 @@ impl Db {
                     base_commit: row.get(17).unwrap_or(None),
                     initial_prompt: row.get(18).unwrap_or(None),
                     task_id: row.get(19).unwrap_or(None),
+                    telegram_enabled: row.get::<_, i32>(20).unwrap_or(0) != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -579,6 +592,31 @@ impl Db {
         Ok(())
     }
 
+    pub fn set_session_telegram_enabled(
+        &self,
+        pty_id: u32,
+        enabled: bool,
+    ) -> Result<(), rusqlite::Error> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE sessions SET telegram_enabled = ?1 WHERE pty_id = ?2",
+            params![enabled as i32, pty_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_session_telegram_enabled(&self, pty_id: u32) -> Result<bool, rusqlite::Error> {
+        let conn = self.conn.lock();
+        let v: Option<i32> = conn
+            .query_row(
+                "SELECT telegram_enabled FROM sessions WHERE pty_id = ?1",
+                params![pty_id],
+                |row| row.get(0),
+            )
+            .ok();
+        Ok(v.unwrap_or(0) != 0)
+    }
+
     pub fn save_scrollback(&self, pty_id: u32, data: &str) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock();
         conn.execute(
@@ -617,7 +655,8 @@ impl Db {
             "SELECT s.id, s.project_id, s.pty_id, s.agent_type, s.task_name, s.working_dir,
                     s.status, s.status_line, s.exit_code, s.launch_command, s.launch_args,
                     s.started_at, s.ended_at, s.scrollback, s.agent_session_id, s.sort_order,
-                    s.worktree_path, s.base_commit, s.initial_prompt, s.task_id
+                    s.worktree_path, s.base_commit, s.initial_prompt, s.task_id,
+                    s.telegram_enabled
              FROM sessions s
              INNER JOIN projects p ON s.project_id = p.id
              WHERE p.path = ?1
@@ -646,6 +685,7 @@ impl Db {
                     base_commit: row.get(17).unwrap_or(None),
                     initial_prompt: row.get(18).unwrap_or(None),
                     task_id: row.get(19).unwrap_or(None),
+                    telegram_enabled: row.get::<_, i32>(20).unwrap_or(0) != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -760,7 +800,8 @@ impl Db {
             "SELECT id, project_id, pty_id, agent_type, task_name, working_dir,
                     status, status_line, exit_code, launch_command, launch_args,
                     started_at, ended_at, scrollback, agent_session_id, sort_order,
-                    worktree_path, base_commit, initial_prompt, task_id
+                    worktree_path, base_commit, initial_prompt, task_id,
+                    telegram_enabled
              FROM sessions WHERE task_id = ?1 ORDER BY sort_order ASC",
         )?;
         let rows = stmt
@@ -786,9 +827,40 @@ impl Db {
                     base_commit: row.get(17).unwrap_or(None),
                     initial_prompt: row.get(18).unwrap_or(None),
                     task_id: row.get(19).unwrap_or(None),
+                    telegram_enabled: row.get::<_, i32>(20).unwrap_or(0) != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// List all sessions with `telegram_enabled = 1` and a currently-running PTY.
+    /// The Telegram bridge polls this periodically to decide which sessions to
+    /// monitor for events. Returns `(pty_id, agent_type, task_name, working_dir)`
+    /// tuples — the minimal data needed for notification formatting.
+    pub fn list_telegram_enabled_sessions(
+        &self,
+    ) -> Result<Vec<(u32, String, String, String)>, rusqlite::Error> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT s.pty_id, s.agent_type, s.task_name, s.working_dir
+             FROM sessions s
+             WHERE s.telegram_enabled = 1
+               AND s.status = 'running'
+               AND s.pty_id IS NOT NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<u32>>(0)?.unwrap_or(0),
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .filter(|(pid, _, _, _)| *pid != 0)
+            .collect();
         Ok(rows)
     }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauri::AppHandle;
 
 pub struct SessionManager {
-    pub pty: PtyManager,
+    pub pty: Arc<PtyManager>,
     pub db: Arc<Db>,
 }
 
@@ -150,7 +150,7 @@ impl SessionManager {
         let start_id = db.max_pty_id().unwrap_or(0) + 1;
 
         Self {
-            pty: PtyManager::new(start_id),
+            pty: Arc::new(PtyManager::new(start_id)),
             db,
         }
     }

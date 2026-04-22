@@ -86,6 +86,19 @@ pub trait AgentAdapter: Send + Sync {
     fn build_command(&self, config: &LaunchConfig) -> (String, Vec<String>, HashMap<String, String>);
     fn extract_status(&self, last_lines: &[String]) -> AgentStatus;
     fn cost_command(&self) -> Option<&str>;
+
+    /// Extract the last "meaningful" agent response from the terminal scrollback.
+    /// Used to populate Telegram idle notifications. Default: `None` — caller
+    /// falls back to a generic "tail before prompt" extraction.
+    fn extract_last_response(&self, _last_lines: &[String]) -> Option<String> {
+        None
+    }
+
+    /// Return true if the tail of the scrollback shows the agent waiting on a
+    /// yes/no permission prompt. Default: `false`.
+    fn detect_permission_prompt(&self, _last_lines: &[String]) -> bool {
+        false
+    }
 }
 
 pub struct AdapterRegistry {
