@@ -26,6 +26,7 @@ import { SIDEBAR_MIN, SIDEBAR_MAX } from "./lib/constants";
 import { getSetting, checkForUpdate } from "./lib/api";
 import type { UpdateInfo } from "./lib/api";
 import { useSettingsStore } from "./store/settingsStore";
+import { useTelegramStore } from "./store/telegramStore";
 import { initNotifications, setupNotificationClickHandler } from "./lib/notifications";
 import UpdateModal from "./components/UpdateModal";
 import { version } from "../package.json";
@@ -92,6 +93,7 @@ function App() {
     });
     useSettingsStore.getState().load();
     useSessionStore.getState().restore();
+    useTelegramStore.getState().refresh();
     const cleanupUi = initUi();
     initNotifications();
     setupNotificationClickHandler();

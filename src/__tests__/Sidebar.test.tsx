@@ -92,6 +92,7 @@ function makeSessions(count: number, projectPath: string): Session[] {
     base_commit: null,
     initial_prompt: null,
     task_id: null,
+    telegramEnabled: false,
   }));
 }
 
@@ -174,6 +175,7 @@ describe("Sidebar (SessionPanel)", () => {
         id: 2, command: "claude", args: [], working_dir: "/tmp/other",
         task_name: "Other Session", agent_type: "claude", status: "running",
         status_line: "", created_at: Date.now(), sortOrder: 1, gitStatus: null, worktree_path: null, base_commit: null, initial_prompt: null, task_id: null,
+    telegramEnabled: false,
       },
     ];
     setupStores(projects, sessions);
@@ -370,6 +372,7 @@ describe("Sidebar (SessionPanel)", () => {
         base_commit: null,
         initial_prompt: null,
         task_id: null,
+    telegramEnabled: false,
       }];
       setupStores(projects, sessions);
       const { container } = render(<Sidebar />);

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import type { Session } from "../lib/types";
 import { removeWorktree, clearWorktreePath } from "../lib/git";
 import { useSessionStore } from "../store/sessionStore";
+import { useTelegramStore } from "../store/telegramStore";
 import { showToast } from "./Toast";
 import AgentIcon from "./AgentIcon";
 import WorktreeIcon from "./WorktreeIcon";
@@ -66,6 +67,8 @@ export default function SessionItem({
 }: SessionItemProps) {
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [showForkConfirm, setShowForkConfirm] = useState(false);
+  const hasTelegramToken = useTelegramStore((s) => s.hasToken);
+  const toggleTelegram = useSessionStore((s) => s.toggleTelegram);
 
   const isAlive = session.status !== "exited";
   const isRunning = session.status === "running";
@@ -160,6 +163,17 @@ export default function SessionItem({
               </>
             ) : (
               <>
+                {hasTelegramToken && (
+                  <button
+                    className={`card-btn card-btn-tg${session.telegramEnabled ? " active" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); toggleTelegram(session.id); }}
+                    title={session.telegramEnabled
+                      ? "Telegram notifications ON — click to disable"
+                      : "Enable Telegram notifications for this session"}
+                  >
+                    {session.telegramEnabled ? "✈" : "✈"}
+                  </button>
+                )}
                 {session.agent_type === "claude" && (
                   showForkConfirm ? (
                     <span className="kill-confirm">

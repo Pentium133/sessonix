@@ -43,6 +43,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     base_commit: null,
     initial_prompt: null,
     task_id: 10,
+    telegramEnabled: false,
     ...overrides,
   };
 }

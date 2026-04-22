@@ -224,6 +224,7 @@ describe("DiffViewer", () => {
           base_commit: null,
           initial_prompt: null,
           task_id: null,
+    telegramEnabled: false,
         },
       ],
       activeSessionId: null,

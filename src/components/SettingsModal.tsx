@@ -2,13 +2,19 @@ import { useEffect, useState } from "react";
 import { useUiStore } from "../store/uiStore";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSettingsStore, FONT_FAMILIES } from "../store/settingsStore";
-import { checkClaudeHooks, installClaudeHooks } from "../lib/api";
+import {
+  checkClaudeHooks,
+  installClaudeHooks,
+  resetTelegramOwner,
+  setTelegramToken,
+} from "../lib/api";
+import { useTelegramStore } from "../store/telegramStore";
 import { isPermissionGranted } from "@tauri-apps/plugin-notification";
 import { requestNotificationPermission } from "../lib/notifications";
 import { THEMES } from "../lib/themes";
 import type { Theme } from "../lib/constants";
 
-const TABS = ["General", "Terminal", "Agents", "Notifications"] as const;
+const TABS = ["General", "Terminal", "Agents", "Notifications", "Telegram"] as const;
 type Tab = (typeof TABS)[number];
 
 interface SettingsModalProps {
@@ -41,10 +47,61 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
   const [hooksLoading, setHooksLoading] = useState(false);
   const [notifGranted, setNotifGranted] = useState<boolean | null>(null);
 
+  // Telegram state
+  const tgStatus = useTelegramStore((s) => s.status);
+  const tgMessage = useTelegramStore((s) => s.message);
+  const tgOwner = useTelegramStore((s) => s.ownerChatId);
+  const tgHasToken = useTelegramStore((s) => s.hasToken);
+  const refreshTelegram = useTelegramStore((s) => s.refresh);
+  const [tokenInput, setTokenInput] = useState("");
+  const [tokenSaving, setTokenSaving] = useState(false);
+
   useEffect(() => {
     checkClaudeHooks().then(setHooksInstalled).catch(() => setHooksInstalled(false));
     isPermissionGranted().then(setNotifGranted).catch(() => setNotifGranted(false));
-  }, []);
+    refreshTelegram();
+  }, [refreshTelegram]);
+
+  // While the Telegram tab is open, poll status every 3s so "Connecting → Polling"
+  // updates without needing a manual refresh click.
+  useEffect(() => {
+    if (tab !== "Telegram") return;
+    const id = setInterval(() => refreshTelegram(), 3000);
+    return () => clearInterval(id);
+  }, [tab, refreshTelegram]);
+
+  const handleSaveToken = async () => {
+    setTokenSaving(true);
+    try {
+      await setTelegramToken(tokenInput.trim() || null);
+      setTokenInput("");
+      await refreshTelegram();
+    } catch (e) {
+      console.error("save token failed", e);
+    }
+    setTokenSaving(false);
+  };
+
+  const handleClearToken = async () => {
+    setTokenSaving(true);
+    try {
+      await setTelegramToken(null);
+      setTokenInput("");
+      await refreshTelegram();
+    } catch (e) {
+      console.error("clear token failed", e);
+    }
+    setTokenSaving(false);
+  };
+
+  const handleResetOwner = async () => {
+    try {
+      await resetTelegramOwner();
+      await refreshTelegram();
+    } catch (e) {
+      console.error("reset owner failed", e);
+    }
+  };
 
   useEscapeKey(closeSettings);
 
@@ -231,6 +288,101 @@ export default function SettingsModal({ onCheckForUpdates }: SettingsModalProps)
                     </button>
                   </div>
                 </div>
+              </div>
+            </>
+          )}
+
+          {tab === "Telegram" && (
+            <>
+              <div className="settings-section">
+                <div className="settings-section-title">Bot token</div>
+                <p className="settings-hint">
+                  Create a bot via{" "}
+                  <a
+                    href="https://t.me/BotFather"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    @BotFather
+                  </a>
+                  , paste the token here, then open your bot in Telegram and send{" "}
+                  <code>/start</code> to register as owner.
+                </p>
+                <div className="settings-row">
+                  <label className="settings-label">Token</label>
+                  <div className="settings-control">
+                    <input
+                      type="password"
+                      className="settings-input"
+                      placeholder={
+                        tgHasToken ? "••••••••• (token set)" : "123456:ABC-..."
+                      }
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.target.value)}
+                      disabled={tokenSaving}
+                    />
+                    <button
+                      className="settings-btn-small"
+                      onClick={handleSaveToken}
+                      disabled={tokenSaving || tokenInput.trim().length === 0}
+                    >
+                      {tokenSaving ? "..." : "Save"}
+                    </button>
+                    {tgHasToken && (
+                      <button
+                        className="settings-btn-small"
+                        onClick={handleClearToken}
+                        disabled={tokenSaving}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">Owner</div>
+                <div className="settings-row">
+                  <label className="settings-label">Claimed chat</label>
+                  <div className="settings-control">
+                    <span className="settings-hooks-status">
+                      {tgOwner === null
+                        ? "Not claimed — send /start to the bot"
+                        : `Chat ID ${tgOwner}`}
+                    </span>
+                    {tgOwner !== null && (
+                      <button
+                        className="settings-btn-small"
+                        onClick={handleResetOwner}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-section-title">Status</div>
+                <div className="settings-row">
+                  <label className="settings-label">Bridge</label>
+                  <span
+                    className={`settings-hooks-status${
+                      tgStatus === "polling" ? " installed" : ""
+                    }`}
+                    title={tgMessage ?? undefined}
+                  >
+                    {tgStatus === "disabled" && "Disabled"}
+                    {tgStatus === "connecting" && "Connecting..."}
+                    {tgStatus === "polling" && "Polling ✓"}
+                    {tgStatus === "error" && (tgMessage ? `Error: ${tgMessage}` : "Error")}
+                  </span>
+                </div>
+                <p className="settings-hint">
+                  Enable per-session with the ✈ icon on any session card. Reply to a
+                  bot notification to send a prompt back into the same session.
+                </p>
               </div>
             </>
           )}

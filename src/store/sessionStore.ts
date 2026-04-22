@@ -11,6 +11,7 @@ import {
   checkClaudeHooks,
   reorderSession,
   setSortOrder,
+  setSessionTelegramEnabled,
 } from "../lib/api";
 import { writeToTerminal } from "../lib/terminalPool";
 import { useProjectStore } from "./projectStore";
@@ -49,6 +50,7 @@ interface SessionState {
   handleExit: (sessionId: number) => void;
   clearSessionWorktree: (id: number) => void;
   reorderSessionOrder: (ptyId: number, newSortOrder: number) => Promise<void>;
+  toggleTelegram: (id: number) => Promise<void>;
 
   // Derived
   sessionsForProject: (projectPath: string) => Session[];
@@ -113,6 +115,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               base_commit: s.base_commit ?? null,
               initial_prompt: s.initial_prompt ?? null,
               task_id: s.task_id ?? null,
+              telegramEnabled: s.telegram_enabled ?? false,
             });
           }
 
@@ -207,6 +210,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           base_commit: params.base_commit ?? null,
           initial_prompt: params.prompt ?? null,
           task_id: effectiveTaskId,
+          telegramEnabled: oldSession?.telegramEnabled ?? false,
         };
         return {
           sessions: state.sessions.map((s) => (s.id === params.replaceId ? session : s)),
@@ -240,6 +244,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           base_commit: params.base_commit ?? null,
           initial_prompt: params.prompt ?? null,
           task_id: params.task_id ?? null,
+          telegramEnabled: false,
         };
         return {
           sessions: [...state.sessions, session],
@@ -402,6 +407,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
     await reorderSession(ptyId, newSortOrder).catch(console.error);
+  },
+
+  toggleTelegram: async (id) => {
+    const target = get().sessions.find((s) => s.id === id);
+    if (!target) return;
+    const next = !target.telegramEnabled;
+    // Optimistic update; roll back on failure.
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, telegramEnabled: next } : s
+      ),
+    }));
+    try {
+      await setSessionTelegramEnabled(id, next);
+    } catch (e) {
+      console.error("toggleTelegram failed", e);
+      set((state) => ({
+        sessions: state.sessions.map((s) =>
+          s.id === id ? { ...s, telegramEnabled: !next } : s
+        ),
+      }));
+    }
   },
 
   sessionsForProject: (projectPath) => {

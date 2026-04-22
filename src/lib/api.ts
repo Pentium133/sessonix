@@ -106,6 +106,7 @@ export interface SessionInfo {
   base_commit: string | null;
   initial_prompt: string | null;
   task_id: number | null;
+  telegram_enabled: boolean;
 }
 
 export async function addProject(
@@ -337,4 +338,34 @@ export interface UpdateInfo {
 
 export async function checkForUpdate(force: boolean): Promise<UpdateInfo | null> {
   return invoke<UpdateInfo | null>("check_for_update", { force });
+}
+
+// --- Telegram bridge ---
+
+export type TelegramStatusKind = "disabled" | "connecting" | "polling" | "error";
+
+export interface TelegramStatus {
+  status: TelegramStatusKind;
+  message: string | null;
+  owner_chat_id: number | null;
+  has_token: boolean;
+}
+
+export async function getTelegramStatus(): Promise<TelegramStatus> {
+  return invoke<TelegramStatus>("get_telegram_status");
+}
+
+export async function setTelegramToken(token: string | null): Promise<void> {
+  return invoke<void>("set_telegram_token", { token });
+}
+
+export async function resetTelegramOwner(): Promise<void> {
+  return invoke<void>("reset_telegram_owner");
+}
+
+export async function setSessionTelegramEnabled(
+  sessionId: number,
+  enabled: boolean
+): Promise<void> {
+  return invoke<void>("set_session_telegram_enabled", { sessionId, enabled });
 }

@@ -53,6 +53,7 @@ export interface Session {
   base_commit: string | null;
   initial_prompt: string | null;
   task_id: number | null;
+  telegramEnabled: boolean;
 }
 
 export interface GitStatus {

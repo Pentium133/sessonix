@@ -697,6 +697,21 @@ body {
   border-color: var(--error);
 }
 
+.card-btn-tg {
+  color: var(--text-dim);
+}
+
+.card-btn-tg:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.card-btn-tg.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 /* Kill/fork confirmation inline */
 .kill-confirm {
   display: flex;
@@ -1872,6 +1887,46 @@ body {
 
 .settings-select:focus {
   border-color: var(--accent);
+}
+
+.settings-input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  min-width: 220px;
+  font-family: var(--font-mono);
+}
+
+.settings-input:focus {
+  border-color: var(--accent);
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0 0 10px 0;
+  line-height: 1.5;
+}
+
+.settings-hint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.settings-hint a:hover {
+  text-decoration: underline;
+}
+
+.settings-hint code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
 }
 
 /* Toggle switch */
