@@ -55,12 +55,21 @@ In scope:
 - Token persisted locally; agent output sent to Telegram's API only for sessions the
   user has explicitly opted in.
 
+Bot commands (v1 set):
+
+- `/start` — first sender becomes owner; subsequent attempts from other chats are silent.
+- `/reset` — owner only; clears the claimed chat id so a new `/start` can rebind.
+- `/sessions` (alias `/list`) — owner only; reply with a numbered list of opted-in
+  running sessions plus their last-known status (idle / running / error).
+- `/send <pty_id> <prompt>` — owner only; write the prompt text (+ `\n`) into the
+  specified session's PTY. Target must be opted-in. Fallback route when the user
+  wants to nudge a session the bot hasn't pinged about recently.
+- `/help` — usage summary listing all commands.
+
 Out of scope (v1):
 
 - Shared/hosted bot with multi-user accounts — users must run their own.
 - Multiple owners / multi-device whitelisting — one `chat_id` per token.
-- Explicit `/send <session_id>` command — the reply-to-message flow is the only inbound
-  route in v1.
 - Active-session `/select` mode or Telegram-topics-per-session routing.
 - `/screenshot`, `/log`, `/watch` commands — v2 if users ask for them.
 - Long-thinking-timeout and error-pattern detection triggers.

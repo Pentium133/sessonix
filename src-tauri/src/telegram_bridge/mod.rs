@@ -24,6 +24,7 @@ use crate::telegram_bridge::events::{
     detect_events, format_exit, format_idle, format_permission, Notification, SessionEvent,
     SessionSnapshot,
 };
+use crate::types::SessionStatus;
 use lru::LruCache;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -410,6 +411,21 @@ fn handle_inbound(
         return;
     }
 
+    if text.starts_with("/help") {
+        let _ = api.send_message(chat_id, HELP_TEXT, Some(msg.message_id));
+        return;
+    }
+
+    if text.starts_with("/sessions") || text.starts_with("/list") {
+        handle_list_sessions(api, inner, db, chat_id, msg.message_id);
+        return;
+    }
+
+    if text.starts_with("/send") {
+        handle_send_command(api, inner, db, pty, chat_id, &msg, text.as_str());
+        return;
+    }
+
     // Reply to a previous bot message → route the text into that session's PTY.
     if let Some(reply_to) = msg.reply_to_message.as_ref() {
         let Some(pty_id) = inner.pending_replies.lock().get(&reply_to.message_id).copied() else {
@@ -447,9 +463,137 @@ fn handle_inbound(
     // Top-level message from owner that isn't a command or reply: explain.
     let _ = api.send_message(
         chat_id,
-        "Reply to a session notification to send a prompt. Top-level messages aren't routed.",
+        "Reply to a notification, or use /sessions + /send <id> <text> to target a session. /help for all commands.",
         Some(msg.message_id),
     );
+}
+
+const HELP_TEXT: &str = "Sessonix bot commands:\n\
+/sessions — list opted-in sessions and their status\n\
+/send <id> <text> — send a prompt to session #id\n\
+/reset — clear owner; next /start rebinds the bot\n\
+/help — this message\n\n\
+You can also reply to any notification and your text goes into the same session.";
+
+fn handle_list_sessions(
+    api: &TelegramApi,
+    inner: &BridgeInner,
+    db: &Db,
+    chat_id: i64,
+    reply_to: i64,
+) {
+    let sessions = match db.list_telegram_enabled_sessions() {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = api.send_message(chat_id, &format!("DB error: {e}"), Some(reply_to));
+            return;
+        }
+    };
+    if sessions.is_empty() {
+        let _ = api.send_message(
+            chat_id,
+            "No sessions opted in. Toggle the ✈ icon on any session card in Sessonix.",
+            Some(reply_to),
+        );
+        return;
+    }
+
+    let snaps = inner.snapshots.lock();
+    let mut body = String::from("Active sessions:\n");
+    for (pty_id, agent_type, task_name, working_dir) in &sessions {
+        let project = std::path::Path::new(working_dir)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(working_dir.as_str());
+        let status_label = snaps
+            .get(pty_id)
+            .map(|s| match s.last_status {
+                SessionStatus::Idle => "idle",
+                SessionStatus::Running => "running",
+                SessionStatus::Error => "error",
+                SessionStatus::Exited => "exited",
+            })
+            .unwrap_or("pending");
+        body.push_str(&format!(
+            "\n#{pty_id}  {project}/{task_name}  ({agent_type}, {status_label})"
+        ));
+    }
+    drop(snaps);
+    body.push_str("\n\nSend with `/send <id> <text>`.");
+    let _ = api.send_message(chat_id, &body, Some(reply_to));
+}
+
+fn handle_send_command(
+    api: &TelegramApi,
+    _inner: &BridgeInner,
+    db: &Db,
+    pty: &PtyManager,
+    chat_id: i64,
+    msg: &Message,
+    full_text: &str,
+) {
+    const USAGE: &str =
+        "Usage: /send <session_id> <text>\nRun /sessions to see active IDs.";
+
+    // Drop the leading "/send" (and a possible "@botname" suffix in groups).
+    let after = full_text
+        .split_once(char::is_whitespace)
+        .map(|(_, rest)| rest)
+        .unwrap_or("")
+        .trim_start();
+    let Some((id_token, rest)) = after.split_once(char::is_whitespace) else {
+        let _ = api.send_message(chat_id, USAGE, Some(msg.message_id));
+        return;
+    };
+    let prompt = rest.trim();
+    if prompt.is_empty() {
+        let _ = api.send_message(chat_id, USAGE, Some(msg.message_id));
+        return;
+    }
+    let Ok(pty_id) = id_token.trim_start_matches('#').parse::<u32>() else {
+        let _ = api.send_message(
+            chat_id,
+            &format!("'{id_token}' is not a valid session id."),
+            Some(msg.message_id),
+        );
+        return;
+    };
+
+    // Safety: refuse to write to a session the user didn't explicitly opt in.
+    // Without this, the command could reach any PTY id by guessing.
+    let opted_in = db.get_session_telegram_enabled(pty_id).unwrap_or(false);
+    if !opted_in {
+        let _ = api.send_message(
+            chat_id,
+            &format!(
+                "Session #{pty_id} is not opted in. Enable the ✈ toggle on it in Sessonix first."
+            ),
+            Some(msg.message_id),
+        );
+        return;
+    }
+
+    let Ok(session) = pty.get_session(pty_id) else {
+        let _ = api.send_message(
+            chat_id,
+            &format!("Session #{pty_id} is not running."),
+            Some(msg.message_id),
+        );
+        return;
+    };
+    let payload = format!("{prompt}\n");
+    match session.write_input(payload.as_bytes()) {
+        Ok(()) => {
+            let _ = api.set_reaction(chat_id, msg.message_id, "👍");
+        }
+        Err(e) => {
+            let _ = api.send_message(
+                chat_id,
+                &format!("Failed to deliver: {e}"),
+                Some(msg.message_id),
+            );
+        }
+    }
 }
 
 fn sweep_sessions(
