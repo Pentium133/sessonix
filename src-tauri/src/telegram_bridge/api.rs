@@ -11,6 +11,10 @@ use serde::Deserialize;
 /// Telegram's hard ceiling for a plain-text message body.
 pub const TELEGRAM_TEXT_LIMIT: usize = 4096;
 
+/// Telegram's hard ceiling for a document/photo caption. Strictly smaller than
+/// the message limit, so the attachment path must trim captions separately.
+pub const TELEGRAM_CAPTION_LIMIT: usize = 1024;
+
 #[derive(Debug, Deserialize)]
 pub struct Update {
     pub update_id: i64,

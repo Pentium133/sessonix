@@ -7,7 +7,7 @@
 //!   when the agent's last response is too long for a single Telegram message.
 
 use crate::adapters::{strip_ansi, AgentAdapter};
-use crate::telegram_bridge::api::TELEGRAM_TEXT_LIMIT;
+use crate::telegram_bridge::api::{TELEGRAM_CAPTION_LIMIT, TELEGRAM_TEXT_LIMIT};
 use crate::telegram_bridge::markdown::{escape_html, to_telegram_html};
 use crate::types::SessionStatus;
 
@@ -170,15 +170,15 @@ pub fn format_idle(session_label: &str, agent_type: &str, response: &str) -> Not
         }
     }
 
-    // Oversize: inline preview + full markdown body as an attachment.
-    let preview_raw: String = response_trimmed.chars().take(INLINE_PREVIEW_LIMIT).collect();
-    let preview_html = to_telegram_html(&preview_raw);
-    let text = format!(
-        "{header}\n\n{preview_html}\n\n<i>… ({}/{} chars — full response attached)</i>",
-        INLINE_PREVIEW_LIMIT, raw_chars
+    // Oversize: header-only caption + full markdown body as an attachment.
+    // Telegram captions are capped at 1024 chars — strictly smaller than the
+    // message limit — so we deliberately drop the inline HTML preview here
+    // and let the `response.md` body carry the full response.
+    let caption = format!(
+        "{header}\n\n<i>full response attached ({raw_chars} chars)</i>"
     );
     Notification {
-        text: clamp_html_to_limit(&text),
+        text: clamp_html_to_caption_limit(&caption),
         attachment: Some(Attachment {
             filename: "response.md".to_string(),
             contents: response_trimmed.as_bytes().to_vec(),
@@ -229,16 +229,18 @@ fn display_agent(agent_type: &str) -> &'static str {
     }
 }
 
-/// Defensive cap on the HTML-composed message. Telegram's limit applies to
-/// the raw byte/codepoint stream — HTML tags count toward it. Clamp on
-/// chars, not bytes, so multibyte scripts don't split mid-codepoint. Tags
-/// cut mid-way would break parsing; the HTML-retry fallback in `api.rs`
-/// catches that case and resends as plain text.
-fn clamp_html_to_limit(text: &str) -> String {
-    if text.chars().count() <= TELEGRAM_TEXT_LIMIT {
+/// Clamp the `sendDocument` caption to Telegram's 1024-char limit. Only
+/// pathological label lengths should trip this; we still clamp defensively
+/// so the whole notification isn't rejected with `caption is too long`.
+/// Chars, not bytes, so multibyte scripts don't split mid-codepoint.
+fn clamp_html_to_caption_limit(text: &str) -> String {
+    if text.chars().count() <= TELEGRAM_CAPTION_LIMIT {
         text.to_string()
     } else {
-        text.chars().take(TELEGRAM_TEXT_LIMIT - 3).collect::<String>() + "..."
+        text.chars()
+            .take(TELEGRAM_CAPTION_LIMIT - 3)
+            .collect::<String>()
+            + "..."
     }
 }
 
@@ -422,10 +424,29 @@ mod tests {
         let long: String = "x".repeat(8000);
         let notif = format_idle("main", "claude", &long);
         assert!(notif.attachment.is_some());
-        assert!(notif.text.chars().count() <= TELEGRAM_TEXT_LIMIT);
+        // Caption fits the 1024-char sendDocument limit, not the 4096-char
+        // message limit — otherwise Telegram rejects the whole notification.
+        assert!(
+            notif.text.chars().count() <= TELEGRAM_CAPTION_LIMIT,
+            "caption was {} chars, expected <= {}",
+            notif.text.chars().count(),
+            TELEGRAM_CAPTION_LIMIT
+        );
+        // Inline preview body must NOT ride along — the file carries it.
+        assert!(!notif.text.contains(&"x".repeat(100)));
         let attach = notif.attachment.unwrap();
         assert_eq!(attach.filename, "response.md");
         assert_eq!(attach.contents.len(), 8000);
+    }
+
+    #[test]
+    fn attachment_caption_survives_oversize_label() {
+        // Pathological label that would blow past 1024 after HTML escaping —
+        // clamp should keep the caption valid rather than trip the API.
+        let label: String = "a".repeat(2000);
+        let long: String = "x".repeat(8000);
+        let notif = format_idle(&label, "claude", &long);
+        assert!(notif.text.chars().count() <= TELEGRAM_CAPTION_LIMIT);
     }
 
     #[test]
@@ -449,10 +470,10 @@ mod tests {
 
     #[test]
     fn clamp_cuts_multibyte_safely() {
-        // Build a string that exceeds the limit in chars.
-        let big: String = "Привет ".repeat(800); // 7 chars × 800 = 5600 chars
-        let clamped = clamp_html_to_limit(&big);
-        assert!(clamped.chars().count() <= TELEGRAM_TEXT_LIMIT);
+        // Build a caption that exceeds the 1024-char limit in chars.
+        let big: String = "Привет ".repeat(200); // 7 chars × 200 = 1400 chars
+        let clamped = clamp_html_to_caption_limit(&big);
+        assert!(clamped.chars().count() <= TELEGRAM_CAPTION_LIMIT);
         // And no UTF-8 split.
         assert!(clamped.is_char_boundary(clamped.len()));
     }
