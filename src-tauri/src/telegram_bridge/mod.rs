@@ -664,7 +664,18 @@ fn sweep_sessions(
 
         for evt in events {
             let notif = match evt {
-                SessionEvent::Idle { response } => format_idle(&label, &s.agent_type, &response),
+                SessionEvent::Idle { response } => {
+                    // For Claude, prefer the assistant turn text from the JSONL
+                    // transcript — the terminal scrollback captures TUI frames,
+                    // not a conversational reply.
+                    let body = if s.agent_type == "claude" {
+                        claude_last_response(&s.working_dir, s.agent_session_id.as_deref())
+                            .unwrap_or(response)
+                    } else {
+                        response
+                    };
+                    format_idle(&label, &s.agent_type, &body)
+                }
                 SessionEvent::Permission => format_permission(&label, &s.agent_type),
                 SessionEvent::Exit { code } => format_exit(&label, &s.agent_type, code),
             };
@@ -673,6 +684,15 @@ fn sweep_sessions(
             }
         }
     }
+}
+
+/// Read the last assistant turn from Claude's JSONL transcript for this
+/// session, if one is available. Returns None when the session ID is missing,
+/// the file isn't on disk yet, or no `end_turn` has been written.
+fn claude_last_response(working_dir: &str, agent_session_id: Option<&str>) -> Option<String> {
+    let sid = agent_session_id?;
+    let path = jsonl::find_session_file_by_id(working_dir, sid)?;
+    jsonl::extract_last_assistant_text(&path)
 }
 
 /// Multi-layer status detector for the bridge sweep.

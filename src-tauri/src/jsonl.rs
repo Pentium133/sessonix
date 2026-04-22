@@ -150,6 +150,57 @@ pub fn detect_status(path: &PathBuf) -> ClaudeStatus {
     ClaudeStatus::Unknown
 }
 
+/// Extract the text of the most recent assistant turn that ended with
+/// `stop_reason == "end_turn"`. Returns `None` if no such turn has been
+/// written yet. Used to populate Telegram Idle notifications with a
+/// meaningful response body instead of a screen-repaint dump.
+pub fn extract_last_assistant_text(path: &PathBuf) -> Option<String> {
+    let (tail, truncated) = read_tail(path, 16384)?;
+    let entries = parse_tail_entries(&tail, truncated);
+    for entry in entries.iter().rev() {
+        if entry.entry_type.as_deref() != Some("assistant") {
+            continue;
+        }
+        let Some(msg) = entry.message.as_ref() else {
+            continue;
+        };
+        if msg.stop_reason.as_deref() != Some("end_turn") {
+            continue;
+        }
+        let text = message_text(msg);
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// Concatenate the `text` fields of all text-typed content blocks in an
+/// assistant message. Ignores tool_use / thinking blocks because those aren't
+/// part of the conversational reply.
+fn message_text(msg: &MessageBody) -> String {
+    let Some(content) = msg.content.as_ref() else {
+        return String::new();
+    };
+    let Some(arr) = content.as_array() else {
+        // Older transcripts may store content as a plain string.
+        return content.as_str().unwrap_or("").to_string();
+    };
+    let mut out = String::new();
+    for block in arr {
+        if block.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+            if !out.is_empty() {
+                out.push_str("\n\n");
+            }
+            out.push_str(t);
+        }
+    }
+    out
+}
+
 fn has_tool_result(msg: &MessageBody) -> bool {
     if let Some(ref content) = msg.content {
         if let Some(arr) = content.as_array() {
@@ -374,6 +425,61 @@ mod tests {
         writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"Done"}}],"usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#).unwrap();
 
         assert_eq!(detect_status(&path), ClaudeStatus::Idle);
+    }
+
+    #[test]
+    fn test_extract_last_assistant_text_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":"hi"}}}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"Hello world"}}]}}}}"#).unwrap();
+        assert_eq!(
+            extract_last_assistant_text(&path).as_deref(),
+            Some("Hello world")
+        );
+    }
+
+    #[test]
+    fn test_extract_last_assistant_text_skips_tool_use_and_thinking() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"thinking","text":"pondering"}},{{"type":"text","text":"First reply"}},{{"type":"tool_use","id":"t","name":"Edit"}},{{"type":"text","text":"Second reply"}}]}}}}"#
+        )
+        .unwrap();
+        let out = extract_last_assistant_text(&path).unwrap();
+        assert!(out.contains("First reply"));
+        assert!(out.contains("Second reply"));
+        assert!(!out.contains("pondering"));
+    }
+
+    #[test]
+    fn test_extract_last_assistant_text_walks_to_end_turn() {
+        // Intermediate tool_use turns must be skipped — we want the most recent
+        // turn that actually closed with end_turn.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"end_turn","content":[{{"type":"text","text":"old answer"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":"next"}}}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"tool_use","content":[{{"type":"tool_use","id":"t","name":"Edit"}}]}}}}"#).unwrap();
+        // No newer end_turn yet → we should still return the old one
+        assert_eq!(
+            extract_last_assistant_text(&path).as_deref(),
+            Some("old answer")
+        );
+    }
+
+    #[test]
+    fn test_extract_last_assistant_text_returns_none_when_no_end_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"tool_use","content":[{{"type":"tool_use","id":"t","name":"Edit"}}]}}}}"#).unwrap();
+        assert_eq!(extract_last_assistant_text(&path), None);
     }
 
     #[test]
