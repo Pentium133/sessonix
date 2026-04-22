@@ -1,6 +1,27 @@
 use parking_lot::Mutex;
 use rusqlite::{Connection, params};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Set file mode to `0600` on Unix-like systems. Idempotent — existing
+/// installations with looser permissions get tightened on the next app
+/// launch without any user action. Silent on IO errors: permission
+/// hardening is best-effort; a failure here is logged and we keep going
+/// rather than refusing to open the app.
+#[cfg(unix)]
+fn tighten_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    let mut perms = meta.permissions();
+    if perms.mode() & 0o777 == 0o600 {
+        return; // Already tight.
+    }
+    perms.set_mode(0o600);
+    if let Err(e) = std::fs::set_permissions(path, perms) {
+        log::warn!("failed to tighten {} permissions: {}", path.display(), e);
+    }
+}
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -103,7 +124,15 @@ impl Db {
     pub fn open(app_dir: &PathBuf) -> Result<Self, rusqlite::Error> {
         std::fs::create_dir_all(app_dir).ok();
         let db_path = app_dir.join("sessonix.db");
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open(&db_path)?;
+        // The DB stores secrets (Telegram bot token, session scrollback that
+        // may include API keys). On Unix, SQLite creates files with the
+        // process umask — usually 0644 — which leaves the file
+        // world-readable on shared hosts. Tighten to 0600 on every open so
+        // existing installations are healed in place without a migration.
+        // No-op on Windows: %APPDATA% is per-user ACL-isolated by default.
+        #[cfg(unix)]
+        tighten_file_permissions(&db_path);
         let db = Self {
             conn: Mutex::new(conn),
         };
@@ -998,6 +1027,47 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         // Should not panic on second migrate
         db.migrate().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_open_creates_file_with_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let _db = Db::open(&dir.path().to_path_buf()).unwrap();
+        let meta = std::fs::metadata(dir.path().join("sessonix.db")).unwrap();
+        assert_eq!(
+            meta.permissions().mode() & 0o777,
+            0o600,
+            "fresh DB must be owner-only"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_open_tightens_existing_loose_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // Simulate a pre-fix installation: open once to create the file,
+        // loosen its mode, then reopen and verify the fix runs.
+        {
+            let _db = Db::open(&dir.path().to_path_buf()).unwrap();
+        }
+        let db_path = dir.path().join("sessonix.db");
+        let mut perms = std::fs::metadata(&db_path).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&db_path, perms).unwrap();
+        assert_eq!(
+            std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+
+        let _db2 = Db::open(&dir.path().to_path_buf()).unwrap();
+        assert_eq!(
+            std::fs::metadata(&db_path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "reopen must heal loose permissions"
+        );
     }
 
     #[test]
