@@ -83,6 +83,10 @@ impl AgentAdapter for GeminiAdapter {
     fn cost_command(&self) -> Option<&str> {
         None
     }
+
+    fn detect_permission_prompt(&self, last_lines: &[String]) -> bool {
+        super::scan_generic_permission(last_lines)
+    }
 }
 
 

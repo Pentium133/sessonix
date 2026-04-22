@@ -62,6 +62,65 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Conservative heuristic for spotting an "approve/deny" prompt in the tail
+/// of an agent's scrollback. Shared by the non-Claude adapters whose TUIs all
+/// land on one of two common idioms: bracketed `[y/n]` / `(y/n)`, or a
+/// numbered pick-list with `1. Yes` / `2. No`.
+///
+/// Runs only against the last ~12 non-empty, ANSI-stripped lines so stale
+/// output from earlier in the session can't spuriously match.
+pub fn scan_generic_permission(last_lines: &[String]) -> bool {
+    let recent_lines: Vec<String> = last_lines
+        .iter()
+        .rev()
+        .filter_map(|l| {
+            let t = strip_ansi(l).trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        })
+        .take(12)
+        .collect();
+
+    let blob = recent_lines.join("\n").to_ascii_lowercase();
+
+    // Bracketed y/n — unambiguous.
+    if blob.contains("[y/n]")
+        || blob.contains("(y/n)")
+        || blob.contains(" y/n?")
+        || blob.contains(" y/n ")
+    {
+        return true;
+    }
+
+    // Numbered pick-list with both items present. Requiring BOTH avoids
+    // tripping on random strings containing "yes" or "no".
+    let has_yes_item = recent_lines.iter().any(|l| {
+        let low = l.to_ascii_lowercase();
+        low.starts_with("1. yes")
+            || low.starts_with("1) yes")
+            || low.starts_with("❯ 1. yes")
+            || low.starts_with("> 1. yes")
+            || low == "yes"
+    });
+    let has_no_item = recent_lines.iter().any(|l| {
+        let low = l.to_ascii_lowercase();
+        low.starts_with("2. no")
+            || low.starts_with("2) no")
+            || low.starts_with("❯ 2. no")
+            || low.starts_with("> 2. no")
+            || low.starts_with("no, ")
+            || low == "no"
+    });
+    if has_yes_item && has_no_item {
+        return true;
+    }
+
+    false
+}
+
 /// Launch parameters used by `AgentAdapter::build_command`.
 ///
 /// Production sessions are currently spawned with commands built on the
@@ -274,5 +333,67 @@ mod tests {
         let result = truncate(s, 20);
         assert!(result.chars().count() <= 20);
         assert!(result.ends_with("..."));
+    }
+
+    // ─── scan_generic_permission ──────────────────────────────────────
+
+    #[test]
+    fn test_scan_permission_bracketed_yn() {
+        let lines = vec!["Overwrite file.rs? [y/N]".to_string()];
+        assert!(scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_paren_yn() {
+        let lines = vec!["Continue (y/n)?".to_string()];
+        assert!(scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_numbered_list() {
+        let lines = vec![
+            "Apply patch?".to_string(),
+            "1. Yes".to_string(),
+            "2. No, tell me what to do differently".to_string(),
+        ];
+        assert!(scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_numbered_list_codex_arrow() {
+        let lines = vec![
+            "❯ 1. Yes".to_string(),
+            "  2. No, tell me what to do differently".to_string(),
+        ];
+        assert!(scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_strips_ansi() {
+        let lines = vec!["\x1b[33m1. Yes\x1b[0m".to_string(), "2. No".to_string()];
+        assert!(scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_no_false_positive_plain_text() {
+        let lines = vec![
+            "Reading yesterday's logs".to_string(),
+            "No errors found".to_string(),
+            "done".to_string(),
+        ];
+        // "yesterday" and "No errors" must not look like a permission prompt.
+        assert!(!scan_generic_permission(&lines));
+    }
+
+    #[test]
+    fn test_scan_permission_empty_scrollback() {
+        assert!(!scan_generic_permission(&[]));
+    }
+
+    #[test]
+    fn test_scan_permission_only_yes_no_match() {
+        // Either one alone isn't enough.
+        let lines = vec!["Should I proceed?".to_string(), "1. Yes".to_string()];
+        assert!(!scan_generic_permission(&lines));
     }
 }
