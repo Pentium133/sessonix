@@ -33,10 +33,11 @@ pub struct Message {
     pub reply_to_message: Option<Box<Message>>,
 }
 
+/// We only care whether `from` is present (to reject anonymous channel
+/// posts). Ownership is bound to `chat.id`, not the sender, so no fields
+/// are read.
 #[derive(Debug, Deserialize)]
-pub struct User {
-    pub id: i64,
-}
+pub struct User {}
 
 #[derive(Debug, Deserialize)]
 pub struct Chat {

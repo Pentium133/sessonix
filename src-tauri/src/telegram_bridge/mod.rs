@@ -369,41 +369,57 @@ fn handle_inbound(
     pty: &PtyManager,
     msg: Message,
 ) {
-    let Some(user) = msg.from.as_ref() else {
+    // Reject anonymous channel posts outright — nothing we do makes sense
+    // without a sender identity. Also guards against malformed updates.
+    if msg.from.is_none() {
         return;
-    };
+    }
     let chat_id = msg.chat.id;
     let text = msg.text.clone().unwrap_or_default();
 
     // Commands: /start, /reset.
     if text.starts_with("/start") {
-        // First writer wins; subsequent /start from non-owner is silent.
+        // Bind ownership to the *chat*, not the sender. Telegram private
+        // chats have `chat.id == user.id` (positive); group/supergroup/channel
+        // chats are always negative. Binding to chat.id keeps session data
+        // out of any chat the owner later invites the bot into.
+        if chat_id <= 0 {
+            let _ = api.send_message(
+                chat_id,
+                "⚠️ /start only works in a private chat with the bot. Open a direct conversation and try again.",
+                Some(msg.message_id),
+            );
+            return;
+        }
+
         let mut owner = inner.owner_chat_id.lock();
         match *owner {
             None => {
-                *owner = Some(user.id);
+                *owner = Some(chat_id);
                 drop(owner);
-                let _ = settings::set_owner(db, user.id);
+                let _ = settings::set_owner(db, chat_id);
                 let _ = api.send_message(
                     chat_id,
                     "✅ Sessonix bot linked. You'll receive notifications from opted-in sessions. Reply to any notification to send a prompt back.",
                     Some(msg.message_id),
                 );
             }
-            Some(existing) if existing == user.id => {
+            Some(existing) if existing == chat_id => {
                 drop(owner);
                 let _ = api.send_message(chat_id, "Already linked.", Some(msg.message_id));
             }
             Some(_) => {
-                // Don't leak that another account owns the bot.
+                // Don't leak that another chat owns the bot.
             }
         }
         return;
     }
 
-    // Owner-only beyond this point.
+    // Owner-only beyond this point. Comparing to `chat_id` means /sessions or
+    // /send issued from a group the owner has invited the bot into won't be
+    // answered — the output stays in the owner's private chat.
     let owner = *inner.owner_chat_id.lock();
-    if owner != Some(user.id) {
+    if owner != Some(chat_id) {
         return;
     }
 
