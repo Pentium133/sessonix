@@ -326,9 +326,12 @@ fn worker_loop(
         let offset = *inner.next_update_offset.lock();
         match api.get_updates(offset, GET_UPDATES_TIMEOUT_SECS) {
             Ok(updates) => {
-                if !updates.is_empty() {
-                    *inner.status.lock() = BridgeStatus::Polling;
-                }
+                // A successful long-poll is the signal that we've recovered
+                // from any transient network error, even if the server had
+                // nothing new to hand us. Don't gate on `!updates.is_empty()`
+                // or the Settings UI stays stuck on Error until a message
+                // happens to arrive.
+                *inner.status.lock() = BridgeStatus::Polling;
                 for u in updates {
                     let advance = u.update_id + 1;
                     *inner.next_update_offset.lock() = advance.max(offset);
