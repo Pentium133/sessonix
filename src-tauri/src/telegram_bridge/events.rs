@@ -65,35 +65,41 @@ pub struct Attachment {
 
 /// Inspect the latest scrollback against a previous snapshot and decide which
 /// events (if any) to emit. Returns the updated snapshot alongside the events.
+///
+/// `current_status` and `permission` are supplied by the caller so multi-layer
+/// detectors (hooks, JSONL, adapter) can override the default adapter-only
+/// path. The scrollback + adapter are still used to extract the response body
+/// that rides along with an `Idle` event.
+///
+/// When the agent is in a permission-wait state, `Idle` is suppressed: the
+/// user needs to see the Permission notification, not a less-informative
+/// "session idle" that rings for the same transition.
 pub fn detect_events(
     prev: &SessionSnapshot,
+    current_status: SessionStatus,
+    permission: bool,
     scrollback: &[String],
     adapter: &dyn AgentAdapter,
 ) -> (SessionSnapshot, Vec<SessionEvent>) {
     let mut events = Vec::new();
 
-    let status = adapter.extract_status(scrollback);
-    let permission = adapter.detect_permission_prompt(scrollback);
-
     // Rising edge: not-Idle → Idle. Error/Exited states don't count.
     let entered_idle =
-        prev.last_status != SessionStatus::Idle && status.state == SessionStatus::Idle;
+        prev.last_status != SessionStatus::Idle && current_status == SessionStatus::Idle;
 
     let entered_permission = permission && !prev.permission_pending;
 
-    if entered_idle {
+    if entered_permission {
+        events.push(SessionEvent::Permission);
+    } else if entered_idle {
         let response = adapter
             .extract_last_response(scrollback)
             .unwrap_or_else(|| fallback_tail_response(scrollback));
         events.push(SessionEvent::Idle { response });
     }
 
-    if entered_permission {
-        events.push(SessionEvent::Permission);
-    }
-
     let next = SessionSnapshot {
-        last_status: status.state,
+        last_status: current_status,
         permission_pending: permission,
     };
     (next, events)
@@ -249,7 +255,7 @@ mod tests {
             permission: false,
             response: Some("done".to_string()),
         };
-        let (_, events) = detect_events(&prev, &[], &adapter);
+        let (_, events) = detect_events(&prev, SessionStatus::Idle, false, &[], &adapter);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], SessionEvent::Idle { .. }));
     }
@@ -265,7 +271,7 @@ mod tests {
             permission: false,
             response: None,
         };
-        let (_, events) = detect_events(&prev, &[], &adapter);
+        let (_, events) = detect_events(&prev, SessionStatus::Idle, false, &[], &adapter);
         assert!(events.is_empty());
     }
 
@@ -277,7 +283,7 @@ mod tests {
             permission: true,
             response: None,
         };
-        let (snap, events) = detect_events(&prev, &[], &adapter);
+        let (snap, events) = detect_events(&prev, SessionStatus::Running, true, &[], &adapter);
         assert!(events.iter().any(|e| matches!(e, SessionEvent::Permission)));
         assert!(snap.permission_pending);
     }
@@ -293,8 +299,22 @@ mod tests {
             permission: true,
             response: None,
         };
-        let (_, events) = detect_events(&prev, &[], &adapter);
+        let (_, events) = detect_events(&prev, SessionStatus::Running, true, &[], &adapter);
         assert!(!events.iter().any(|e| matches!(e, SessionEvent::Permission)));
+    }
+
+    #[test]
+    fn permission_suppresses_idle() {
+        // Agent both went idle AND is waiting on permission — only Permission fires.
+        let prev = SessionSnapshot::default();
+        let adapter = StubAdapter {
+            status: SessionStatus::Idle,
+            permission: true,
+            response: Some("hello".to_string()),
+        };
+        let (_, events) = detect_events(&prev, SessionStatus::Idle, true, &[], &adapter);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], SessionEvent::Permission));
     }
 
     #[test]
@@ -305,7 +325,7 @@ mod tests {
             permission: false,
             response: Some("hello".to_string()),
         };
-        let (_, events) = detect_events(&prev, &[], &adapter);
+        let (_, events) = detect_events(&prev, SessionStatus::Idle, false, &[], &adapter);
         match &events[0] {
             SessionEvent::Idle { response } => assert_eq!(response, "hello"),
             _ => panic!("expected Idle"),
@@ -325,7 +345,7 @@ mod tests {
             "compiling".to_string(),
             "done".to_string(),
         ];
-        let (_, events) = detect_events(&prev, &scrollback, &adapter);
+        let (_, events) = detect_events(&prev, SessionStatus::Idle, false, &scrollback, &adapter);
         match &events[0] {
             SessionEvent::Idle { response } => {
                 // Fallback stops at the `$ ...` prompt and keeps what came after.

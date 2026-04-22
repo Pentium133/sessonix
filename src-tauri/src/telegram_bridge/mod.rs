@@ -18,6 +18,8 @@ pub mod settings;
 
 use crate::adapters::AdapterRegistry;
 use crate::db::Db;
+use crate::hooks;
+use crate::jsonl;
 use crate::pty_manager::PtyManager;
 use crate::telegram_bridge::api::{Message, TelegramApi};
 use crate::telegram_bridge::events::{
@@ -502,14 +504,14 @@ fn handle_list_sessions(
 
     let snaps = inner.snapshots.lock();
     let mut body = String::from("Active sessions:\n");
-    for (pty_id, agent_type, task_name, working_dir) in &sessions {
-        let project = std::path::Path::new(working_dir)
+    for s in &sessions {
+        let project = std::path::Path::new(&s.working_dir)
             .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(working_dir.as_str());
+            .and_then(|n| n.to_str())
+            .unwrap_or(s.working_dir.as_str());
         let status_label = snaps
-            .get(pty_id)
-            .map(|s| match s.last_status {
+            .get(&s.pty_id)
+            .map(|snap| match snap.last_status {
                 SessionStatus::Idle => "idle",
                 SessionStatus::Running => "running",
                 SessionStatus::Error => "error",
@@ -517,7 +519,8 @@ fn handle_list_sessions(
             })
             .unwrap_or("pending");
         body.push_str(&format!(
-            "\n#{pty_id}  {project}/{task_name}  ({agent_type}, {status_label})"
+            "\n#{}  {}/{}  ({}, {})",
+            s.pty_id, project, s.task_name, s.agent_type, status_label
         ));
     }
     drop(snaps);
@@ -619,27 +622,37 @@ fn sweep_sessions(
     };
 
     // Drop snapshots for sessions that are no longer opted-in (or ended).
-    let live_ids: std::collections::HashSet<u32> = sessions.iter().map(|(id, _, _, _)| *id).collect();
+    let live_ids: std::collections::HashSet<u32> = sessions.iter().map(|s| s.pty_id).collect();
     inner.snapshots.lock().retain(|k, _| live_ids.contains(k));
 
-    for (pty_id, agent_type, task_name, _working_dir) in sessions {
-        let Ok(session) = pty.get_session(pty_id) else {
+    for s in sessions {
+        let Ok(session) = pty.get_session(s.pty_id) else {
             continue;
         };
         let scrollback = session.snapshot_last_lines();
-        let Some(adapter) = adapters.get(&agent_type) else {
+        let Some(adapter) = adapters.get(&s.agent_type) else {
             continue;
         };
+
+        let (current_status, permission) = detect_status(
+            &s.agent_type,
+            s.pty_id,
+            &s.working_dir,
+            s.agent_session_id.as_deref(),
+            &scrollback,
+            adapter,
+        );
 
         let prev = inner
             .snapshots
             .lock()
-            .get(&pty_id)
+            .get(&s.pty_id)
             .cloned()
             .unwrap_or_default();
 
-        let (next, events) = detect_events(&prev, &scrollback, adapter);
-        inner.snapshots.lock().insert(pty_id, next);
+        let (next, events) =
+            detect_events(&prev, current_status, permission, &scrollback, adapter);
+        inner.snapshots.lock().insert(s.pty_id, next);
 
         if events.is_empty() {
             continue;
@@ -647,19 +660,67 @@ fn sweep_sessions(
 
         // Include the project name in the label when available, matching the
         // format used for exit notifications.
-        let label = session_label(db, pty_id).unwrap_or_else(|| task_name.clone());
+        let label = session_label(db, s.pty_id).unwrap_or_else(|| s.task_name.clone());
 
         for evt in events {
             let notif = match evt {
-                SessionEvent::Idle { response } => format_idle(&label, &agent_type, &response),
-                SessionEvent::Permission => format_permission(&label, &agent_type),
-                SessionEvent::Exit { code } => format_exit(&label, &agent_type, code),
+                SessionEvent::Idle { response } => format_idle(&label, &s.agent_type, &response),
+                SessionEvent::Permission => format_permission(&label, &s.agent_type),
+                SessionEvent::Exit { code } => format_exit(&label, &s.agent_type, code),
             };
-            if let Err(e) = send_notification(api, chat_id, &notif, None, inner, pty_id) {
+            if let Err(e) = send_notification(api, chat_id, &notif, None, inner, s.pty_id) {
                 log::warn!("tg send: {e}");
             }
         }
     }
+}
+
+/// Multi-layer status detector for the bridge sweep.
+///
+/// Claude pipes (hook file → JSONL tail → adapter on terminal tail) mirror
+/// the order used by the `get_session_status` IPC — terminal-only detection
+/// is unreliable for Claude because its TUI repaints the screen without
+/// leaving idle markers the adapter can pattern-match on.
+///
+/// Returns `(status, permission)`. Permission is `true` exactly when the
+/// agent is blocked on a yes/no permission prompt.
+fn detect_status(
+    agent_type: &str,
+    pty_id: u32,
+    working_dir: &str,
+    agent_session_id: Option<&str>,
+    scrollback: &[String],
+    adapter: &dyn crate::adapters::AgentAdapter,
+) -> (SessionStatus, bool) {
+    if agent_type == "claude" {
+        if let Some(hook) = hooks::read_hook_status(pty_id) {
+            return match hook.status.as_str() {
+                "idle" => (SessionStatus::Idle, false),
+                "waiting_permission" => (SessionStatus::Idle, true),
+                "running" => (SessionStatus::Running, false),
+                _ => (SessionStatus::Running, false),
+            };
+        }
+        if let Some(sid) = agent_session_id {
+            if let Some(path) = jsonl::find_session_file_by_id(working_dir, sid) {
+                match jsonl::detect_status(&path) {
+                    jsonl::ClaudeStatus::Idle => return (SessionStatus::Idle, false),
+                    jsonl::ClaudeStatus::WaitingPermission => {
+                        return (SessionStatus::Idle, true);
+                    }
+                    jsonl::ClaudeStatus::Active => return (SessionStatus::Running, false),
+                    jsonl::ClaudeStatus::Error(_) => return (SessionStatus::Error, false),
+                    jsonl::ClaudeStatus::Unknown => {}
+                }
+            }
+        }
+    }
+
+    // Terminal-tail adapter fallback for everything else and for Claude when
+    // neither hooks nor JSONL returned a verdict.
+    let status = adapter.extract_status(scrollback).state;
+    let permission = adapter.detect_permission_prompt(scrollback);
+    (status, permission)
 }
 
 fn session_label(db: &Db, pty_id: u32) -> Option<String> {

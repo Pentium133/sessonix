@@ -63,6 +63,18 @@ pub struct InsertSession<'a> {
     pub task_id: Option<i64>,
 }
 
+/// Minimal view of a session for the Telegram bridge's sweep loop.
+/// Only the fields the bridge reads are exposed — everything else stays
+/// inside the full `SessionRow`.
+#[derive(Debug, Clone)]
+pub struct TelegramSessionSummary {
+    pub pty_id: u32,
+    pub agent_type: String,
+    pub task_name: String,
+    pub working_dir: String,
+    pub agent_session_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct TaskRow {
@@ -836,14 +848,13 @@ impl Db {
 
     /// List all sessions with `telegram_enabled = 1` and a currently-running PTY.
     /// The Telegram bridge polls this periodically to decide which sessions to
-    /// monitor for events. Returns `(pty_id, agent_type, task_name, working_dir)`
-    /// tuples — the minimal data needed for notification formatting.
+    /// monitor for events.
     pub fn list_telegram_enabled_sessions(
         &self,
-    ) -> Result<Vec<(u32, String, String, String)>, rusqlite::Error> {
+    ) -> Result<Vec<TelegramSessionSummary>, rusqlite::Error> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
-            "SELECT s.pty_id, s.agent_type, s.task_name, s.working_dir
+            "SELECT s.pty_id, s.agent_type, s.task_name, s.working_dir, s.agent_session_id
              FROM sessions s
              WHERE s.telegram_enabled = 1
                AND s.status = 'running'
@@ -851,15 +862,16 @@ impl Db {
         )?;
         let rows = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, Option<u32>>(0)?.unwrap_or(0),
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
+                Ok(TelegramSessionSummary {
+                    pty_id: row.get::<_, Option<u32>>(0)?.unwrap_or(0),
+                    agent_type: row.get::<_, String>(1)?,
+                    task_name: row.get::<_, String>(2)?,
+                    working_dir: row.get::<_, String>(3)?,
+                    agent_session_id: row.get::<_, Option<String>>(4)?,
+                })
             })?
             .filter_map(|r| r.ok())
-            .filter(|(pid, _, _, _)| *pid != 0)
+            .filter(|s| s.pty_id != 0)
             .collect();
         Ok(rows)
     }
