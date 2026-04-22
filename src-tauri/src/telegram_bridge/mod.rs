@@ -444,7 +444,9 @@ fn handle_inbound(
             );
             return;
         };
-        let body = format!("{}\n", text);
+        // Terminal "Enter" is \r (0x0D), not \n — raw-mode TUIs (Claude,
+        // Codex) listen for carriage return and ignore LF.
+        let body = format!("{text}\r");
         match session.write_input(body.as_bytes()) {
             Ok(()) => {
                 let _ = api.set_reaction(chat_id, msg.message_id, "👍");
@@ -581,7 +583,8 @@ fn handle_send_command(
         );
         return;
     };
-    let payload = format!("{prompt}\n");
+    // Terminal Enter is \r (0x0D). See reply-to-message handler above.
+    let payload = format!("{prompt}\r");
     match session.write_input(payload.as_bytes()) {
         Ok(()) => {
             let _ = api.set_reaction(chat_id, msg.message_id, "👍");
