@@ -14,6 +14,7 @@
 
 pub mod api;
 pub mod events;
+pub mod markdown;
 pub mod settings;
 
 use crate::adapters::AdapterRegistry;
@@ -272,7 +273,9 @@ fn send_notification(
     inner: &BridgeInner,
     pty_id: u32,
 ) -> Result<i64, String> {
+    let parse_mode = if notif.html { Some("HTML") } else { None };
     let message_id = if let Some(att) = &notif.attachment {
+        // Document captions also render with parse_mode when supplied.
         api.send_document(
             chat_id,
             &att.filename,
@@ -281,7 +284,7 @@ fn send_notification(
             reply_to,
         )?
     } else {
-        api.send_message(chat_id, &notif.text, reply_to)?
+        api.send_message_opts(chat_id, &notif.text, reply_to, parse_mode)?
     };
     inner.pending_replies.lock().put(message_id, pty_id);
     Ok(message_id)

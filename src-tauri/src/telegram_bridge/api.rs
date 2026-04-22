@@ -99,6 +99,20 @@ impl TelegramApi {
         text: &str,
         reply_to: Option<i64>,
     ) -> Result<i64, String> {
+        self.send_message_opts(chat_id, text, reply_to, None)
+    }
+
+    /// Same as [`send_message`] but accepts a `parse_mode` (`"HTML"` or
+    /// `"MarkdownV2"`). Used for Idle notifications where we convert the
+    /// agent's markdown reply into Telegram HTML so code blocks and bold
+    /// render natively.
+    pub fn send_message_opts(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to: Option<i64>,
+        parse_mode: Option<&str>,
+    ) -> Result<i64, String> {
         let url = self.url("sendMessage");
         let mut payload = serde_json::json!({
             "chat_id": chat_id,
@@ -106,6 +120,9 @@ impl TelegramApi {
         });
         if let Some(mid) = reply_to {
             payload["reply_to_message_id"] = mid.into();
+        }
+        if let Some(mode) = parse_mode {
+            payload["parse_mode"] = mode.into();
         }
 
         let mut resp = ureq::post(&url)
@@ -116,12 +133,30 @@ impl TelegramApi {
             .read_json()
             .map_err(|e| format!("sendMessage parse: {e}"))?;
 
+        // If HTML parsing is rejected (unbalanced tag etc.), retry once in
+        // plain text so the user doesn't get silence on a formatting glitch.
+        if !body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
+            && parse_mode.is_some()
+        {
+            log::warn!(
+                "sendMessage HTML rejected ({}); retrying without parse_mode",
+                body.get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            );
+            return self.send_message_opts(chat_id, text, reply_to, None);
+        }
+
         extract_sent_message_id(&body)
     }
 
     /// Send a UTF-8 document (e.g. a markdown transcript) as an attachment,
     /// optionally with a text caption. Returns the sent message's id on
     /// success. `filename` is what Telegram shows as the download name.
+    ///
+    /// Caption is always submitted with `parse_mode=HTML` — our captions are
+    /// produced by the markdown→HTML converter and would otherwise render
+    /// their tags as literal text.
     pub fn send_document(
         &self,
         chat_id: i64,
@@ -137,6 +172,7 @@ impl TelegramApi {
         multipart_field(&mut body, &boundary, "chat_id", chat_id.to_string().as_bytes());
         if let Some(cap) = caption {
             multipart_field(&mut body, &boundary, "caption", cap.as_bytes());
+            multipart_field(&mut body, &boundary, "parse_mode", b"HTML");
         }
         if let Some(mid) = reply_to {
             multipart_field(

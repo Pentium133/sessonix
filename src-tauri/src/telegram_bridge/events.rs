@@ -8,6 +8,7 @@
 
 use crate::adapters::{strip_ansi, AgentAdapter};
 use crate::telegram_bridge::api::TELEGRAM_TEXT_LIMIT;
+use crate::telegram_bridge::markdown::{escape_html, to_telegram_html};
 use crate::types::SessionStatus;
 
 /// Leave headroom under Telegram's 4096-char limit so the header (≤ ~200 chars)
@@ -50,11 +51,13 @@ pub enum SessionEvent {
 
 /// A ready-to-send Telegram message. `attachment` is populated when the
 /// response exceeded [`INLINE_PREVIEW_LIMIT`] and the full body moves to a
-/// `.md` attachment.
+/// `.md` attachment. `html` flags whether `text` contains Telegram HTML
+/// markup that requires `parse_mode=HTML` on send.
 #[derive(Debug)]
 pub struct Notification {
     pub text: String,
     pub attachment: Option<Attachment>,
+    pub html: bool,
 }
 
 #[derive(Debug)]
@@ -127,48 +130,73 @@ pub fn fallback_tail_response(last_lines: &[String]) -> String {
 
 /// Build an Idle-event notification. Oversize responses collapse to a short
 /// inline preview plus a markdown attachment with the full body.
+///
+/// `response` is the raw markdown the agent produced (e.g. Claude's assistant
+/// text). It's converted to Telegram HTML so code blocks / bold / headers
+/// render natively; without this, users saw literal ` ``` ` fences and `##`
+/// markers in Telegram.
 pub fn format_idle(session_label: &str, agent_type: &str, response: &str) -> Notification {
-    let header = format!("🟢 {} · {} — idle", display_agent(agent_type), session_label);
+    let header = format!(
+        "🟢 <b>{}</b> · <code>{}</code> — idle",
+        escape_html(display_agent(agent_type)),
+        escape_html(session_label)
+    );
     let response_trimmed = response.trim();
 
-    if response_trimmed.chars().count() <= INLINE_PREVIEW_LIMIT {
-        // One-message case.
-        let text = if response_trimmed.is_empty() {
-            header
-        } else {
-            format!("{header}\n\n{response_trimmed}")
-        };
+    // Preview-vs-attachment split is decided on the RAW markdown length: HTML
+    // tags don't count as "content", so we truncate sanely even when a reply
+    // has lots of code-fence markup.
+    let raw_chars = response_trimmed.chars().count();
+    if raw_chars == 0 {
         return Notification {
-            text: clamp_to_telegram_limit(&text),
+            text: header,
             attachment: None,
+            html: true,
         };
     }
 
-    // Oversize: inline preview (first N chars) + full body as attachment.
-    let preview: String = response_trimmed.chars().take(INLINE_PREVIEW_LIMIT).collect();
-    let total = response_trimmed.chars().count();
+    if raw_chars <= INLINE_PREVIEW_LIMIT {
+        let body_html = to_telegram_html(response_trimmed);
+        let composed = format!("{header}\n\n{body_html}");
+        // HTML expansion may push a near-limit raw body over 4096 chars.
+        // When that happens, fall back to the attachment path so the reader
+        // still sees the whole thing.
+        if composed.chars().count() <= TELEGRAM_TEXT_LIMIT {
+            return Notification {
+                text: composed,
+                attachment: None,
+                html: true,
+            };
+        }
+    }
+
+    // Oversize: inline preview + full markdown body as an attachment.
+    let preview_raw: String = response_trimmed.chars().take(INLINE_PREVIEW_LIMIT).collect();
+    let preview_html = to_telegram_html(&preview_raw);
     let text = format!(
-        "{header}\n\n{preview}\n\n… ({}/{} chars — full response attached)",
-        INLINE_PREVIEW_LIMIT, total
+        "{header}\n\n{preview_html}\n\n<i>… ({}/{} chars — full response attached)</i>",
+        INLINE_PREVIEW_LIMIT, raw_chars
     );
     Notification {
-        text: clamp_to_telegram_limit(&text),
+        text: clamp_html_to_limit(&text),
         attachment: Some(Attachment {
             filename: "response.md".to_string(),
             contents: response_trimmed.as_bytes().to_vec(),
         }),
+        html: true,
     }
 }
 
 pub fn format_permission(session_label: &str, agent_type: &str) -> Notification {
     let text = format!(
-        "🟡 {} · {} — waiting for permission\n\nReply y / yes to allow, n / no to deny.",
-        display_agent(agent_type),
-        session_label
+        "🟡 <b>{}</b> · <code>{}</code> — waiting for permission\n\nReply <b>y</b> / <b>yes</b> to allow, <b>n</b> / <b>no</b> to deny.",
+        escape_html(display_agent(agent_type)),
+        escape_html(session_label)
     );
     Notification {
         text,
         attachment: None,
+        html: true,
     }
 }
 
@@ -179,8 +207,13 @@ pub fn format_exit(session_label: &str, agent_type: &str, code: Option<i32>) -> 
         None => "exited".to_string(),
     };
     Notification {
-        text: format!("⚪ {} · {} — {suffix}", display_agent(agent_type), session_label),
+        text: format!(
+            "⚪ <b>{}</b> · <code>{}</code> — {suffix}",
+            escape_html(display_agent(agent_type)),
+            escape_html(session_label)
+        ),
         attachment: None,
+        html: true,
     }
 }
 
@@ -196,10 +229,12 @@ fn display_agent(agent_type: &str) -> &'static str {
     }
 }
 
-/// Defensive cap: even after preview truncation, pathological inputs can push
-/// the composed message above Telegram's limit. Clamp on chars, not bytes, so
-/// multibyte scripts don't split mid-codepoint.
-fn clamp_to_telegram_limit(text: &str) -> String {
+/// Defensive cap on the HTML-composed message. Telegram's limit applies to
+/// the raw byte/codepoint stream — HTML tags count toward it. Clamp on
+/// chars, not bytes, so multibyte scripts don't split mid-codepoint. Tags
+/// cut mid-way would break parsing; the HTML-retry fallback in `api.rs`
+/// catches that case and resends as plain text.
+fn clamp_html_to_limit(text: &str) -> String {
     if text.chars().count() <= TELEGRAM_TEXT_LIMIT {
         text.to_string()
     } else {
@@ -361,8 +396,25 @@ mod tests {
     fn short_response_single_message_no_attachment() {
         let notif = format_idle("main/feat", "claude", "small response");
         assert!(notif.attachment.is_none());
+        assert!(notif.html);
         assert!(notif.text.contains("main/feat"));
         assert!(notif.text.contains("small response"));
+    }
+
+    #[test]
+    fn idle_converts_markdown_to_html() {
+        let notif = format_idle("feat", "claude", "Use **bold** and `code`.");
+        assert!(notif.text.contains("<b>bold</b>"));
+        assert!(notif.text.contains("<code>code</code>"));
+        assert!(notif.html);
+    }
+
+    #[test]
+    fn idle_renders_fenced_code_block() {
+        let md = "Here:\n```rust\nfn x() {}\n```";
+        let notif = format_idle("feat", "claude", md);
+        assert!(notif.text.contains("<pre><code class=\"language-rust\">"));
+        assert!(notif.text.contains("fn x()"));
     }
 
     #[test]
@@ -380,8 +432,9 @@ mod tests {
     fn permission_message_shape() {
         let notif = format_permission("main", "claude");
         assert!(notif.text.contains("waiting for permission"));
-        assert!(notif.text.contains("y / yes"));
+        assert!(notif.text.contains("<b>y</b>"));
         assert!(notif.attachment.is_none());
+        assert!(notif.html);
     }
 
     #[test]
@@ -398,10 +451,18 @@ mod tests {
     fn clamp_cuts_multibyte_safely() {
         // Build a string that exceeds the limit in chars.
         let big: String = "Привет ".repeat(800); // 7 chars × 800 = 5600 chars
-        let clamped = clamp_to_telegram_limit(&big);
+        let clamped = clamp_html_to_limit(&big);
         assert!(clamped.chars().count() <= TELEGRAM_TEXT_LIMIT);
         // And no UTF-8 split.
         assert!(clamped.is_char_boundary(clamped.len()));
+    }
+
+    #[test]
+    fn labels_with_html_metachars_are_escaped() {
+        // A task name with < or & must not break HTML parsing downstream.
+        let notif = format_idle("proj/<bad>&task", "claude", "ok");
+        assert!(notif.text.contains("&lt;bad&gt;&amp;task"));
+        assert!(!notif.text.contains("<bad>"));
     }
 
     #[test]
