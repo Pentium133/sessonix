@@ -30,6 +30,7 @@ export default function Sidebar() {
   const toggleCollapse = useUiStore((s) => s.toggleCollapse);
 
   const [confirmRemoveProject, setConfirmRemoveProject] = useState(false);
+  const [confirmCloseProject, setConfirmCloseProject] = useState(false);
 
   const { draggingId, dragOverId, draggingIdRef, handlersFor: dragHandlersFor } = useSessionDragAndDrop();
 
@@ -54,6 +55,11 @@ export default function Sidebar() {
   });
 
   useEffect(() => {
+    setConfirmCloseProject(false);
+    setConfirmRemoveProject(false);
+  }, [activeProjectPath]);
+
+  useEffect(() => {
     if (activeProjectPath) loadQuickPrompts(activeProjectPath);
   }, [activeProjectPath, loadQuickPrompts]);
 
@@ -61,6 +67,7 @@ export default function Sidebar() {
   const projectSessions = sessions
     .filter((s) => s.working_dir === activeProjectPath)
     .sort((a, b) => a.sortOrder - b.sortOrder);
+  const runningCount = projectSessions.filter((s) => s.status !== "exited").length;
 
   // Split sessions: ungrouped (task_id === null) stay on top; grouped sessions
   // render inside their task group.
@@ -151,6 +158,7 @@ export default function Sidebar() {
     if (!activeProjectPath) return;
     if (!confirmRemoveProject) {
       setConfirmRemoveProject(true);
+      setConfirmCloseProject(false); // mutual exclusion
       return;
     }
     setConfirmRemoveProject(false);
@@ -159,6 +167,21 @@ export default function Sidebar() {
       if (removedSessionIds.length > 0) {
         useSessionStore.getState().removeSessions(removedSessionIds);
       }
+    } catch (err) {
+      showToast(String(err), "error");
+    }
+  };
+
+  const onCloseProject = async () => {
+    if (!activeProjectPath) return;
+    if (!confirmCloseProject) {
+      setConfirmCloseProject(true);
+      setConfirmRemoveProject(false); // mutual exclusion
+      return;
+    }
+    setConfirmCloseProject(false);
+    try {
+      await useProjectStore.getState().closeProject(activeProjectPath);
     } catch (err) {
       showToast(String(err), "error");
     }
@@ -216,8 +239,46 @@ export default function Sidebar() {
               <path d="M12 5c0 3-4 3.5-4 6.5" />
             </svg>
           </button>
-          {confirmRemoveProject ? (
+          {confirmCloseProject ? (
             <>
+              <button
+                className="project-close-confirm-btn"
+                onClick={onCloseProject}
+                title="Confirm close"
+              >
+                Close
+              </button>
+              <button
+                className="project-close-cancel-btn"
+                onClick={() => setConfirmCloseProject(false)}
+                title="Cancel"
+              >
+                Cancel
+              </button>
+              <button
+                className="project-remove-header-btn"
+                onClick={onRemoveProject}
+                title="Remove project"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <line x1="2" y1="2" x2="10" y2="10" />
+                  <line x1="10" y1="2" x2="2" y2="10" />
+                </svg>
+              </button>
+            </>
+          ) : confirmRemoveProject ? (
+            <>
+              <button
+                className="project-close-header-btn"
+                onClick={onCloseProject}
+                disabled={runningCount === 0}
+                title={runningCount === 0 ? "No running sessions" : "Close project (kill all running sessions, keep history)"}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                  <line x1="12" y1="2" x2="12" y2="12" />
+                </svg>
+              </button>
               <button
                 className="project-remove-confirm-btn"
                 onClick={onRemoveProject}
@@ -234,16 +295,29 @@ export default function Sidebar() {
               </button>
             </>
           ) : (
-            <button
-              className="project-remove-header-btn"
-              onClick={onRemoveProject}
-              title="Remove project"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <line x1="2" y1="2" x2="10" y2="10" />
-                <line x1="10" y1="2" x2="2" y2="10" />
-              </svg>
-            </button>
+            <>
+              <button
+                className="project-close-header-btn"
+                onClick={onCloseProject}
+                disabled={runningCount === 0}
+                title={runningCount === 0 ? "No running sessions" : "Close project (kill all running sessions, keep history)"}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                  <line x1="12" y1="2" x2="12" y2="12" />
+                </svg>
+              </button>
+              <button
+                className="project-remove-header-btn"
+                onClick={onRemoveProject}
+                title="Remove project"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <line x1="2" y1="2" x2="10" y2="10" />
+                  <line x1="10" y1="2" x2="2" y2="10" />
+                </svg>
+              </button>
+            </>
           )}
         </div>
       </div>
