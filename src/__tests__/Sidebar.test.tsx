@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock API before importing stores — invoke returns undefined by default,
 // which breaks async load() calls in quickPromptStore/taskStore on render.
@@ -485,6 +485,35 @@ describe("Sidebar (SessionPanel)", () => {
       fireEvent.click(container.querySelector(".project-remove-header-btn")!);
       expect(container.querySelector(".project-remove-confirm-btn")).toBeTruthy();
       expect(container.querySelector(".project-close-confirm-btn")).toBeNull();
+    });
+
+    it("resets an open close confirm when activeProjectPath changes", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      expect(container.querySelector(".project-close-confirm-btn")).toBeTruthy();
+
+      act(() => {
+        useProjectStore.setState({ activeProjectPath: "/some/other/project" });
+      });
+
+      // After project switch, the confirm row collapses back to the default
+      // (no project is now active because /some/other/project isn't in the list,
+      // so the sidebar enters its empty state — confirm row must NOT survive).
+      expect(container.querySelector(".project-close-confirm-btn")).toBeNull();
+    });
+
+    it("resets an open remove confirm when activeProjectPath changes", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-remove-header-btn")!);
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeTruthy();
+
+      act(() => {
+        useProjectStore.setState({ activeProjectPath: "/some/other/project" });
+      });
+
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeNull();
     });
   });
 });
