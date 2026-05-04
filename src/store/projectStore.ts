@@ -103,20 +103,20 @@ export const useProjectStore = create<ProjectState>()(
 
   closeProject: async (path) => {
     const sessionStore = useSessionStore.getState();
-    const running = sessionStore.sessions.filter(
+    const active = sessionStore.sessions.filter(
       (s) => s.working_dir === path && s.status !== "exited"
     );
-    if (running.length === 0) return;
+    if (active.length === 0) return;
 
     await Promise.all(
-      running.map((s) =>
+      active.map((s) =>
         killSession(s.id).catch((err) => {
           console.error(`[closeProject] killSession ${s.id} failed:`, err);
         })
       )
     );
 
-    for (const s of running) {
+    for (const s of active) {
       sessionStore.handleExit(s.id);
     }
   },

@@ -10,6 +10,7 @@ vi.mock("../lib/api", () => ({
 
 import { useProjectStore } from "../store/projectStore";
 import * as api from "../lib/api";
+import type { Session } from "../lib/types";
 
 describe("projectStore", () => {
   beforeEach(() => {
@@ -156,15 +157,15 @@ describe("projectStore", () => {
       return mod.useSessionStore;
     }
 
-    function makeRunning(id: number, path: string) {
+    function makeRunning(id: number, path: string): Session {
       return {
         id,
         command: "claude",
         args: [],
         working_dir: path,
         task_name: `s${id}`,
-        agent_type: "claude" as const,
-        status: "running" as const,
+        agent_type: "claude",
+        status: "running",
         status_line: "doing things",
         created_at: 0,
         sortOrder: id,
@@ -176,9 +177,14 @@ describe("projectStore", () => {
       };
     }
 
-    function makeExited(id: number, path: string) {
-      return { ...makeRunning(id, path), status: "exited" as const, status_line: "" };
+    function makeExited(id: number, path: string): Session {
+      return { ...makeRunning(id, path), status: "exited", status_line: "" };
     }
+
+    beforeEach(async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({ sessions: [], activeSessionId: null, loaded: false });
+    });
 
     it("kills every running session of the project, never deleteSession", async () => {
       const useSessionStore = await loadSessionStore();
@@ -247,6 +253,37 @@ describe("projectStore", () => {
       await useProjectStore.getState().closeProject("/proj/a");
 
       expect(api.killSession).not.toHaveBeenCalled();
+    });
+
+    it("kills idle and error sessions too (any non-exited status)", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [
+          { ...makeRunning(1, "/proj/a"), status: "idle" },
+          { ...makeRunning(2, "/proj/a"), status: "error" },
+          { ...makeRunning(3, "/proj/a"), status: "running" },
+          makeExited(4, "/proj/a"),
+        ],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [{ path: "/proj/a", name: "a", sessions: [1, 2, 3, 4] }],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      expect(api.killSession).toHaveBeenCalledTimes(3);
+      expect(api.killSession).toHaveBeenCalledWith(1); // idle
+      expect(api.killSession).toHaveBeenCalledWith(2); // error
+      expect(api.killSession).toHaveBeenCalledWith(3); // running
+      expect(api.killSession).not.toHaveBeenCalledWith(4); // exited
+
+      const sessions = useSessionStore.getState().sessions;
+      expect(sessions.find((s) => s.id === 1)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 2)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 3)?.status).toBe("exited");
     });
 
     it("does not touch other projects' sessions", async () => {
