@@ -7,6 +7,7 @@ import {
   reorderProject as apiReorderProject,
   killSession,
 } from "../lib/api";
+import { useSessionStore } from "./sessionStore";
 
 function projectName(path: string): string {
   const segments = path.replace(/\/+$/, "").split("/");
@@ -32,6 +33,7 @@ interface ProjectState {
   addSessionToProject: (path: string, sessionId: number) => void;
   removeSessionFromProject: (sessionId: number) => void;
   replaceSessionInProject: (path: string, oldId: number, newId: number) => void;
+  closeProject: (path: string) => Promise<void>;
 
   // Reorder: optimistic local move, then persist via reorder_project IPC.
   reorderProjects: (fromPath: string, toPath: string) => void;
@@ -97,6 +99,26 @@ export const useProjectStore = create<ProjectState>()(
 
     // Return removed session IDs so caller can clean up sessionStore
     return project.sessions;
+  },
+
+  closeProject: async (path) => {
+    const sessionStore = useSessionStore.getState();
+    const running = sessionStore.sessions.filter(
+      (s) => s.working_dir === path && s.status !== "exited"
+    );
+    if (running.length === 0) return;
+
+    await Promise.all(
+      running.map((s) =>
+        killSession(s.id).catch((err) => {
+          console.error(`[closeProject] killSession ${s.id} failed:`, err);
+        })
+      )
+    );
+
+    for (const s of running) {
+      sessionStore.handleExit(s.id);
+    }
   },
 
   ensureProject: (path) => {
