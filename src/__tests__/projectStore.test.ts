@@ -4,10 +4,13 @@ vi.mock("../lib/api", () => ({
   addProject: vi.fn().mockResolvedValue(1),
   removeProject: vi.fn().mockResolvedValue(undefined),
   killSession: vi.fn().mockResolvedValue(undefined),
+  deleteSession: vi.fn().mockResolvedValue(undefined),
+  reorderProject: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { useProjectStore } from "../store/projectStore";
 import * as api from "../lib/api";
+import type { Session } from "../lib/types";
 
 describe("projectStore", () => {
   beforeEach(() => {
@@ -142,6 +145,190 @@ describe("projectStore", () => {
       await useProjectStore.getState().removeProject("/tmp/b");
 
       expect(useProjectStore.getState().activeProjectPath).toBe("/tmp/a");
+    });
+  });
+
+  describe("closeProject", () => {
+    // Static import of useSessionStore at the top of the file would create
+    // a circular dependency with projectStore in this test file's module
+    // graph. Use an async import inside each test instead.
+    async function loadSessionStore() {
+      const mod = await import("../store/sessionStore");
+      return mod.useSessionStore;
+    }
+
+    function makeRunning(id: number, path: string): Session {
+      return {
+        id,
+        command: "claude",
+        args: [],
+        working_dir: path,
+        task_name: `s${id}`,
+        agent_type: "claude",
+        status: "running",
+        status_line: "doing things",
+        created_at: 0,
+        sortOrder: id,
+        gitStatus: null,
+        worktree_path: null,
+        base_commit: null,
+        initial_prompt: null,
+        task_id: null,
+      };
+    }
+
+    function makeExited(id: number, path: string): Session {
+      return { ...makeRunning(id, path), status: "exited", status_line: "" };
+    }
+
+    beforeEach(async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({ sessions: [], activeSessionId: null, loaded: false });
+    });
+
+    it("kills every running session of the project, never deleteSession", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [
+          makeRunning(1, "/proj/a"),
+          makeRunning(2, "/proj/a"),
+          makeExited(3, "/proj/a"),
+          makeRunning(4, "/proj/b"),
+        ],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [
+          { path: "/proj/a", name: "a", sessions: [1, 2, 3] },
+          { path: "/proj/b", name: "b", sessions: [4] },
+        ],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      expect(api.killSession).toHaveBeenCalledTimes(2);
+      expect(api.killSession).toHaveBeenCalledWith(1);
+      expect(api.killSession).toHaveBeenCalledWith(2);
+      expect(api.killSession).not.toHaveBeenCalledWith(3); // already exited
+      expect(api.killSession).not.toHaveBeenCalledWith(4); // other project
+      expect(api.deleteSession).not.toHaveBeenCalled();
+      expect(api.removeProject).not.toHaveBeenCalled();
+    });
+
+    it("optimistically marks running sessions as exited", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [makeRunning(1, "/proj/a"), makeRunning(2, "/proj/a")],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [{ path: "/proj/a", name: "a", sessions: [1, 2] }],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      const { sessions } = useSessionStore.getState();
+      expect(sessions).toHaveLength(2);
+      expect(sessions.find((s) => s.id === 1)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 2)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 1)?.status_line).toBe("");
+    });
+
+    it("is a no-op when no running sessions", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [makeExited(1, "/proj/a"), makeExited(2, "/proj/a")],
+        activeSessionId: null,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [{ path: "/proj/a", name: "a", sessions: [1, 2] }],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      expect(api.killSession).not.toHaveBeenCalled();
+    });
+
+    it("kills idle and error sessions too (any non-exited status)", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [
+          { ...makeRunning(1, "/proj/a"), status: "idle" },
+          { ...makeRunning(2, "/proj/a"), status: "error" },
+          { ...makeRunning(3, "/proj/a"), status: "running" },
+          makeExited(4, "/proj/a"),
+        ],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [{ path: "/proj/a", name: "a", sessions: [1, 2, 3, 4] }],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      expect(api.killSession).toHaveBeenCalledTimes(3);
+      expect(api.killSession).toHaveBeenCalledWith(1); // idle
+      expect(api.killSession).toHaveBeenCalledWith(2); // error
+      expect(api.killSession).toHaveBeenCalledWith(3); // running
+      expect(api.killSession).not.toHaveBeenCalledWith(4); // exited
+
+      const sessions = useSessionStore.getState().sessions;
+      expect(sessions.find((s) => s.id === 1)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 2)?.status).toBe("exited");
+      expect(sessions.find((s) => s.id === 3)?.status).toBe("exited");
+    });
+
+    it("does not touch other projects' sessions", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [makeRunning(1, "/proj/a"), makeRunning(2, "/proj/b")],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [
+          { path: "/proj/a", name: "a", sessions: [1] },
+          { path: "/proj/b", name: "b", sessions: [2] },
+        ],
+        activeProjectPath: "/proj/a",
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      const sb = useSessionStore.getState().sessions.find((s) => s.id === 2)!;
+      expect(sb.status).toBe("running");
+    });
+
+    it("preserves activeProjectPath, activeSessionId, sessions array length", async () => {
+      const useSessionStore = await loadSessionStore();
+      useSessionStore.setState({
+        sessions: [makeRunning(1, "/proj/a"), makeRunning(2, "/proj/a")],
+        activeSessionId: 1,
+        loaded: true,
+      });
+      useProjectStore.setState({
+        projects: [{ path: "/proj/a", name: "a", sessions: [1, 2] }],
+        activeProjectPath: "/proj/a",
+        lastActiveSession: { "/proj/a": 1 },
+      });
+
+      await useProjectStore.getState().closeProject("/proj/a");
+
+      const sStore = useSessionStore.getState();
+      const pStore = useProjectStore.getState();
+      expect(sStore.sessions).toHaveLength(2);
+      expect(sStore.activeSessionId).toBe(1);
+      expect(pStore.activeProjectPath).toBe("/proj/a");
+      expect(pStore.lastActiveSession["/proj/a"]).toBe(1);
+      expect(pStore.projects[0].sessions).toEqual([1, 2]);
     });
   });
 

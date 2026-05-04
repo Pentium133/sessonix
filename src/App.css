@@ -402,6 +402,65 @@ body {
   border-color: var(--text-dim);
 }
 
+.project-close-header-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.sidebar-header:hover .project-close-header-btn {
+  opacity: 1;
+}
+
+.project-close-header-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--hover);
+}
+
+.project-close-header-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.sidebar-header:hover .project-close-header-btn:disabled {
+  opacity: 0.3;
+}
+
+.project-close-confirm-btn {
+  background: var(--accent);
+  border: none;
+  color: var(--bg);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.project-close-cancel-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.project-close-cancel-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
 .sidebar-content {
   flex: 1;
   overflow-y: auto;

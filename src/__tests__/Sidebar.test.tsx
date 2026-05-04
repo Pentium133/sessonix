@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Mock API before importing stores — invoke returns undefined by default,
 // which breaks async load() calls in quickPromptStore/taskStore on render.
@@ -390,6 +390,130 @@ describe("Sidebar (SessionPanel)", () => {
 
       fireEvent.click(container.querySelector(".kill-confirm-btn")!);
       expect(mockHandleForkSession).toHaveBeenCalledWith(sessions[0]);
+    });
+  });
+
+  describe("Close project button", () => {
+    function setupWithRunning(runningCount: number) {
+      const projects: Project[] = [
+        { path: "/tmp/app", name: "app", sessions: Array.from({ length: runningCount + 1 }, (_, i) => i + 1) },
+      ];
+      const sessions: Session[] = Array.from({ length: runningCount + 1 }, (_, i) => ({
+        id: i + 1,
+        command: "claude",
+        args: [],
+        working_dir: "/tmp/app",
+        task_name: `Session ${i + 1}`,
+        agent_type: "claude" as const,
+        status: i < runningCount ? "running" as const : "exited" as const,
+        status_line: "",
+        created_at: Date.now(),
+        sortOrder: i + 1,
+        gitStatus: null,
+        worktree_path: null,
+        base_commit: null,
+        initial_prompt: null,
+        task_id: null,
+      }));
+      setupStores(projects, sessions);
+    }
+
+    it("renders the close button when an active project exists", () => {
+      setupWithRunning(1);
+      const { container } = render(<Sidebar />);
+      expect(container.querySelector(".project-close-header-btn")).toBeTruthy();
+    });
+
+    it("disables the button when there are no running sessions", () => {
+      setupWithRunning(0); // 0 running + 1 exited
+      const { container } = render(<Sidebar />);
+      const btn = container.querySelector(".project-close-header-btn") as HTMLButtonElement | null;
+      expect(btn).toBeTruthy();
+      expect(btn!.disabled).toBe(true);
+      expect(btn!.title).toBe("No running sessions");
+    });
+
+    it("first click shows Close / Cancel confirm row, hides original button", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      const btn = container.querySelector(".project-close-header-btn") as HTMLButtonElement;
+      fireEvent.click(btn);
+      expect(container.querySelector(".project-close-header-btn")).toBeNull();
+      expect(container.querySelector(".project-close-confirm-btn")).toBeTruthy();
+      expect(container.querySelector(".project-close-cancel-btn")).toBeTruthy();
+    });
+
+    it("Cancel restores the close button without calling closeProject", () => {
+      const closeProject = vi.fn().mockResolvedValue(undefined);
+      setupWithRunning(2);
+      useProjectStore.setState({ closeProject });
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      fireEvent.click(container.querySelector(".project-close-cancel-btn")!);
+      expect(container.querySelector(".project-close-header-btn")).toBeTruthy();
+      expect(container.querySelector(".project-close-confirm-btn")).toBeNull();
+      expect(closeProject).not.toHaveBeenCalled();
+    });
+
+    it("confirm Close calls closeProject with the active project path", () => {
+      const closeProject = vi.fn().mockResolvedValue(undefined);
+      setupWithRunning(2);
+      useProjectStore.setState({ closeProject });
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      fireEvent.click(container.querySelector(".project-close-confirm-btn")!);
+      expect(closeProject).toHaveBeenCalledWith("/tmp/app");
+    });
+
+    it("opening close confirm cancels an open remove confirm", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      // Open Remove confirm first
+      fireEvent.click(container.querySelector(".project-remove-header-btn")!);
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeTruthy();
+      // Open Close confirm — should hide Remove confirm
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      expect(container.querySelector(".project-close-confirm-btn")).toBeTruthy();
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeNull();
+    });
+
+    it("opening remove confirm cancels an open close confirm", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      expect(container.querySelector(".project-close-confirm-btn")).toBeTruthy();
+      fireEvent.click(container.querySelector(".project-remove-header-btn")!);
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeTruthy();
+      expect(container.querySelector(".project-close-confirm-btn")).toBeNull();
+    });
+
+    it("resets an open close confirm when activeProjectPath changes", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-close-header-btn")!);
+      expect(container.querySelector(".project-close-confirm-btn")).toBeTruthy();
+
+      act(() => {
+        useProjectStore.setState({ activeProjectPath: "/some/other/project" });
+      });
+
+      // After project switch, the confirm row collapses back to the default
+      // (no project is now active because /some/other/project isn't in the list,
+      // so the sidebar enters its empty state — confirm row must NOT survive).
+      expect(container.querySelector(".project-close-confirm-btn")).toBeNull();
+    });
+
+    it("resets an open remove confirm when activeProjectPath changes", () => {
+      setupWithRunning(2);
+      const { container } = render(<Sidebar />);
+      fireEvent.click(container.querySelector(".project-remove-header-btn")!);
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeTruthy();
+
+      act(() => {
+        useProjectStore.setState({ activeProjectPath: "/some/other/project" });
+      });
+
+      expect(container.querySelector(".project-remove-confirm-btn")).toBeNull();
     });
   });
 });
