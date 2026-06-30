@@ -187,9 +187,21 @@ export default function TerminalPane({
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (!instance.disposed) {
-          fitAddon.fit();
-          terminal.focus();
+        if (instance.disposed) return;
+        fitAddon.fit();
+        terminal.focus();
+        // Resync the PTY to xterm's dimensions *unconditionally*. We can't rely
+        // on terminal.onResize: it only fires when fit() *changes* xterm's size,
+        // but a backgrounded session's PTY may sit at the backend default
+        // (120x30) while this xterm instance already holds the fitted size. fit()
+        // is then a no-op, onResize never fires, and a full-screen TUI (e.g.
+        // Claude) keeps rendering at the stale width — content crammed into the
+        // left columns with alt-screen artifacts on the right. Sending the size
+        // explicitly forces a backend resize + SIGWINCH + repaint.
+        if (!isActiveSessionExited) {
+          resizeSession(activeSessionId, terminal.cols, terminal.rows).catch(
+            console.error
+          );
         }
       });
     });
