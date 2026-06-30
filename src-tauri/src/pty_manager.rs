@@ -191,6 +191,19 @@ impl PtyManager {
         }
         cmd.env("TERM", "xterm-256color");
 
+        // Guarantee a UTF-8 locale. Launched from the macOS GUI, Sessonix inherits no
+        // LANG/LC_* from a shell, so the whitelist loop above copies none and children
+        // fall back to the "C" locale. Locale-aware tools (e.g. Claude Code) then encode
+        // non-ASCII output through the system primary encoding (Mac Cyrillic on Cyrillic-
+        // locale Macs), producing double-encoded mojibake. Only default when the user
+        // hasn't set one explicitly.
+        if std::env::var_os("LC_ALL").is_none()
+            && std::env::var_os("LC_CTYPE").is_none()
+            && std::env::var_os("LANG").is_none()
+        {
+            cmd.env("LANG", "en_US.UTF-8");
+        }
+
         // Allocate ID atomically before spawning, so SESSONIX_PTY_ID matches the session ID
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         cmd.env("SESSONIX_PTY_ID", id.to_string());
