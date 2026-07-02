@@ -241,23 +241,47 @@ export default function TerminalPane({
     };
   }, []);
 
-  // ResizeObserver
+  // Re-fit the active terminal whenever its wrapper is laid out or resized.
+  // We observe the *wrapper*, not the pane: the pane never changes size on a
+  // tab switch, so a pane observer stays silent and the only fit happens in the
+  // switch effect's rAF — which can run before a freshly re-created terminal
+  // (e.g. one evicted from the LRU pool after sitting idle) has its real layout,
+  // fitting it to a too-small size. The wrapper goes from display:none (no box)
+  // to a real box when the session becomes active, so the observer fires once
+  // layout settles — the same "resize fixes it" moment the user hits by hand,
+  // now automatic. The wrapper is 100%×100% of the pane, so window/pane resizes
+  // still fire it too.
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || activeSessionId === null) return;
+    const wrapper = container.querySelector(
+      `[data-session-id="${activeSessionId}"]`
+    ) as HTMLDivElement | null;
+    if (!wrapper) return;
 
-    const observer = new ResizeObserver(() => {
-      if (activeSessionId === null) return;
+    let cancelled = false;
+    const refit = () => {
+      if (cancelled) return;
       const instance = getTerminal(activeSessionId);
-      if (instance && !instance.disposed) {
-        requestAnimationFrame(() => {
-          instance.fitAddon.fit();
-        });
-      }
-    });
+      if (!instance || instance.disposed) return;
+      instance.fitAddon.fit();
+      resizeSession(activeSessionId, instance.terminal.cols, instance.terminal.rows).catch(
+        () => {}
+      );
+    };
 
-    observer.observe(container);
-    return () => observer.disconnect();
+    const observer = new ResizeObserver(() => refit());
+    observer.observe(wrapper);
+    // Web fonts can finish loading after the terminal opened, changing the cell
+    // metrics without changing the wrapper's box — so the observer won't refire.
+    // Re-fit once fonts are ready to catch that tail. Guarded by `cancelled` so a
+    // late resolution can't fit a terminal the user has already switched away from.
+    void document.fonts?.ready.then(refit);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
   }, [activeSessionId]);
 
   // Periodic scrollback save (every 30s for active terminal only)
