@@ -10,6 +10,7 @@ vi.mock("../lib/api", () => ({
   detachSession: vi.fn().mockResolvedValue(undefined),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
+  getAgentSessionId: vi.fn().mockResolvedValue(null),
   installClaudeHooks: vi.fn().mockResolvedValue(true),
   checkClaudeHooks: vi.fn().mockResolvedValue(true),
   reorderSession: vi.fn().mockResolvedValue(undefined),
@@ -202,6 +203,40 @@ describe("sessionStore", () => {
   // ─── addSession ─────────────────────────────────────────────
 
   describe("addSession", () => {
+    it("stores the agent session ID the backend generated for the new PTY", async () => {
+      seedProject("/tmp/app", []);
+      vi.mocked(api.createSession).mockResolvedValue(11);
+      vi.mocked(api.getAgentSessionId).mockResolvedValueOnce("uuid-fresh");
+
+      await useSessionStore.getState().addSession({
+        command: "claude",
+        working_dir: "/tmp/app",
+        agent_type: "claude",
+      });
+
+      expect(api.getAgentSessionId).toHaveBeenCalledWith(11);
+      expect(useSessionStore.getState().sessions[0].agentSessionId).toBe("uuid-fresh");
+    });
+
+    it("stores the agent session ID on relaunch (replaceId) too", async () => {
+      seedSessions([makeSession({ id: 1, status: "exited", agentSessionId: "uuid-old" })], 1);
+      seedProject("/tmp/app", [1]);
+      vi.mocked(api.createSession).mockResolvedValue(12);
+      vi.mocked(api.getAgentSessionId).mockResolvedValueOnce("uuid-old");
+
+      await useSessionStore.getState().addSession({
+        command: "claude",
+        args: ["--resume", "uuid-old"],
+        working_dir: "/tmp/app",
+        agent_type: "claude",
+        replaceId: 1,
+      });
+
+      const [session] = useSessionStore.getState().sessions;
+      expect(session.id).toBe(12);
+      expect(session.agentSessionId).toBe("uuid-old");
+    });
+
     it("adds first session with sortOrder 1", async () => {
       seedProject("/tmp/app", []);
       vi.mocked(api.createSession).mockResolvedValue(10);

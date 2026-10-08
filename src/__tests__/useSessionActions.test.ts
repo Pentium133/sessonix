@@ -10,6 +10,7 @@ vi.mock("../lib/api", () => ({
   detachSession: vi.fn().mockResolvedValue(undefined),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
+  getAgentSessionId: vi.fn().mockResolvedValue(null),
   installClaudeHooks: vi.fn().mockResolvedValue(true),
   checkClaudeHooks: vi.fn().mockResolvedValue(true),
   reorderSession: vi.fn().mockResolvedValue(undefined),
@@ -139,6 +140,50 @@ describe("useSessionActions", () => {
       const call = vi.mocked(api.createSession).mock.calls[0][0];
       expect(call.args).toContain("--continue");
       expect(call.args).not.toContain("--resume");
+    });
+
+    it("resumes the DB-stored Claude session ID when the in-memory one is missing", async () => {
+      // Sessions created during this app run never get agentSessionId in memory —
+      // only the DB knows it. Falling back to --continue made every relaunched
+      // session in a project open the same (latest) conversation.
+      const session = makeSession({ id: 7, agentSessionId: undefined, status: "exited" });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 7 });
+      vi.mocked(api.getAgentSessionId).mockImplementationOnce(async (ptyId) =>
+        ptyId === 7 ? "uuid-own" : "uuid-other");
+      vi.mocked(api.createSession).mockResolvedValue(60);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      expect(api.getAgentSessionId).toHaveBeenCalledWith(7);
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["--dangerously-skip-permissions", "--resume", "uuid-own"]);
+    });
+
+    it("resumes the DB-stored Codex thread ID captured by polling after launch", async () => {
+      const session = makeSession({
+        id: 8,
+        command: "codex",
+        agent_type: "codex",
+        args: [],
+        agentSessionId: undefined,
+        status: "exited",
+      });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 8 });
+      vi.mocked(api.getAgentSessionId).mockResolvedValueOnce("thread-xyz");
+      vi.mocked(api.createSession).mockResolvedValue(61);
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRelaunchSession(session);
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toEqual(["resume", "thread-xyz"]);
     });
 
     it("uses resume --last for Codex without agentSessionId", async () => {
@@ -543,6 +588,27 @@ describe("useSessionActions", () => {
         "info",
         expect.objectContaining({ label: "Relaunch" })
       );
+    });
+
+    it("toast relaunch resumes the DB-stored session ID read before the row is deleted", async () => {
+      const session = makeSession({ id: 9, agentSessionId: undefined, status: "exited" });
+      useSessionStore.setState({ sessions: [session], activeSessionId: 9 });
+      vi.mocked(api.getAgentSessionId).mockResolvedValueOnce("uuid-removed");
+
+      const { result } = renderHook(() => useSessionActions());
+
+      await act(async () => {
+        await result.current.handleRemoveSession(9);
+      });
+
+      const action = mockShowToast.mock.calls[0][2] as { onClick: () => void };
+      await act(async () => {
+        action.onClick();
+      });
+
+      const call = vi.mocked(api.createSession).mock.calls[0][0];
+      expect(call.args).toContain("uuid-removed");
+      expect(call.args).not.toContain("--continue");
     });
 
     it("does not show toast for running sessions", async () => {
