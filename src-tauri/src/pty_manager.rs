@@ -331,7 +331,7 @@ impl PtyManager {
 impl Drop for PtyManager {
     fn drop(&mut self) {
         let sessions = self.sessions.lock();
-        for (_, session) in sessions.iter() {
+        for session in sessions.values() {
             let _ = session.kill();
         }
     }
