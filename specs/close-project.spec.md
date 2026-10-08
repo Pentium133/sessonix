@@ -6,6 +6,8 @@ targets:
   - ../src/components/Sidebar.tsx
   - ../src/__tests__/projectStore.test.ts
   - ../src/__tests__/Sidebar.test.tsx
+  - ../src/hooks/useSessionActions.ts
+  - ../src/store/sessionStore.ts
 ---
 
 # Close Project
@@ -53,6 +55,14 @@ For every session belonging to the project (`session.working_dir === path`) whos
 - Does **not** call `remove_project`. Project survives in `projects` table.
 - Does **not** clear `activeProjectPath`, `activeSessionId`, or `lastActiveSession`. The user stays where they were; the visible terminal just becomes an `exited` session card with the existing `Relaunch` affordance.
 - Does **not** remove sessions from the `sessions[]` array in `sessionStore`. Same list, statuses flipped.
+
+### Relaunch resumes the session's own conversation
+
+- `Relaunch` (card button and the "removed" toast) and `Fork` read `agent_session_id` from the DB via `get_agent_session_id(pty_id)` before building resume args — never only from in-memory state, which lags for sessions created in the current app run and for Codex/OpenCode IDs captured by polling.
+  `[@test] ../src/__tests__/useSessionActions.test.ts`
+- `addSession` stores the backend-generated `agent_session_id` on the new in-memory session (new and `replaceId` paths).
+  `[@test] ../src/__tests__/sessionStore.test.ts`
+- `--continue` / `resume --last` are used only when the DB has no ID for that session. Otherwise every relaunched session in a project would open the same (latest) conversation.
 
 ### Idempotency and race conditions
 

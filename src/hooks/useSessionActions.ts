@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useSessionStore } from "../store/sessionStore";
+import { readAgentSessionId, useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { showToast } from "../components/Toast";
 import { getGitStatus } from "../lib/git";
@@ -41,26 +41,34 @@ function buildResumeArgs(session: Session): string[] {
   return session.args;
 }
 
+/** Session with its agent conversation ID re-read from the DB (see `readAgentSessionId`). */
+async function withFreshAgentSessionId(session: Session): Promise<Session> {
+  const agentSessionId = await readAgentSessionId(session.id);
+  return agentSessionId ? { ...session, agentSessionId } : session;
+}
+
 /**
  * Higher-level session actions that involve UI side effects (toasts, confirmation).
  * Keeps stores pure data+API; UI concerns live here.
  */
 export function useSessionActions() {
-  const handleRemoveSession = useCallback((id: number) => {
+  const handleRemoveSession = useCallback(async (id: number) => {
     const { sessions, removeSession, addSession } = useSessionStore.getState();
-    const session = sessions.find((s) => s.id === id);
-    if (!session) {
+    const found = sessions.find((s) => s.id === id);
+    if (!found) {
       removeSession(id);
       return;
     }
 
     // Running sessions: kill immediately
-    if (session.status !== "exited") {
+    if (found.status !== "exited") {
       removeSession(id);
       return;
     }
 
-    // Exited sessions: remove + show relaunch toast
+    // Exited sessions: remove + show relaunch toast. Read the conversation ID
+    // before removeSession deletes the DB row the toast would resume from.
+    const session = await withFreshAgentSessionId(found);
     removeSession(id);
     showToast(
       `"${session.task_name}" removed`,
@@ -81,9 +89,10 @@ export function useSessionActions() {
     );
   }, []);
 
-  const handleRelaunchSession = useCallback(async (session: Session) => {
+  const handleRelaunchSession = useCallback(async (staleSession: Session) => {
     const { addSession } = useSessionStore.getState();
     try {
+      const session = await withFreshAgentSessionId(staleSession);
       // Check if worktree still exists for worktree sessions.
       // working_dir must always be the original project path (for project grouping).
       // worktree_path is where the PTY actually runs.
@@ -116,9 +125,10 @@ export function useSessionActions() {
     }
   }, []);
 
-  const handleForkSession = useCallback(async (session: Session) => {
+  const handleForkSession = useCallback(async (staleSession: Session) => {
     const { addSession } = useSessionStore.getState();
     try {
+      const session = await withFreshAgentSessionId(staleSession);
       // For Codex and OpenCode, fork requires a known session/thread ID.
       // Without it we'd be forking "the last session", which is racy.
       if ((session.agent_type === "codex" || session.agent_type === "opencode")

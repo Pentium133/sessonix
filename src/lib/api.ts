@@ -123,6 +123,11 @@ export async function listProjects(): Promise<ProjectInfo[]> {
   return invoke<ProjectInfo[]>("list_projects");
 }
 
+/** Agent conversation ID as stored in the DB (the source of truth — Codex/OpenCode fill it in after launch). */
+export async function getAgentSessionId(ptyId: number): Promise<string | null> {
+  return invoke<string | null>("get_agent_session_id", { ptyId });
+}
+
 export async function listSessions(
   projectPath: string
 ): Promise<SessionInfo[]> {

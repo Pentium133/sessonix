@@ -5,6 +5,7 @@ import {
   deleteSession,
   attachSession,
   detachSession,
+  getAgentSessionId,
   listProjects,
   listSessions,
   installClaudeHooks,
@@ -19,6 +20,21 @@ import type { AgentType, GitStatus, Session, SessionStatus } from "../lib/types"
 /// Reserved pty-id for the Diff pseudo-session. Real PTY ids always ≥ 1
 /// (see `SessionManager::new` — `max_pty_id + 1`), so `0` is safe.
 export const DIFF_PSEUDO_ID = 0;
+
+/**
+ * Agent conversation ID from the DB. The backend generates the Claude UUID and
+ * polls Codex/OpenCode IDs after launch, so in-memory state can lag behind —
+ * anything that resumes a conversation must read it from here. Without it,
+ * relaunch falls back to `--continue`, which opens the latest conversation in
+ * the cwd and makes every session of a project resume the same thread.
+ */
+export async function readAgentSessionId(ptyId: number): Promise<string | undefined> {
+  try {
+    return (await getAgentSessionId(ptyId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 interface SessionState {
   sessions: Session[];
@@ -184,6 +200,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       prompt: params.prompt,
       task_id: params.task_id,
     });
+    const agentSessionId = await readAgentSessionId(id);
 
     if (params.replaceId != null) {
       const oldSession = get().sessions.find((s) => s.id === params.replaceId);
@@ -201,6 +218,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           status: "running",
           status_line: "",
           created_at: Date.now(),
+          agentSessionId,
           sortOrder: replacedOrder,
           gitStatus: null,
           worktree_path: params.worktree_path ?? null,
@@ -234,6 +252,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           status: "running",
           status_line: "",
           created_at: Date.now(),
+          agentSessionId,
           sortOrder: maxOrder + 1,
           gitStatus: null,
           worktree_path: params.worktree_path ?? null,

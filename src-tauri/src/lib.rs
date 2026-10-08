@@ -382,6 +382,14 @@ fn set_sort_order(
 }
 
 #[tauri::command]
+fn get_agent_session_id(
+    state: tauri::State<'_, SessionManager>,
+    pty_id: u32,
+) -> Result<Option<String>, String> {
+    state.db.get_agent_session_id(pty_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn notify_session_exit(state: tauri::State<'_, SessionManager>, pty_id: u32) -> Result<(), String> {
     state.on_session_exit(pty_id);
     Ok(())
@@ -1346,6 +1354,7 @@ pub fn run() {
             reorder_session,
             reorder_project,
             set_sort_order,
+            get_agent_session_id,
             get_running_session_count,
             force_exit,
             get_setting,

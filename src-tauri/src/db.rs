@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::PathBuf;
 
 pub struct Db {
@@ -568,6 +568,20 @@ impl Db {
             log::warn!("update_agent_session_id: no session found for pty_id {}", pty_id);
         }
         Ok(())
+    }
+
+    /// Agent conversation ID for a session, or `None` if the row is missing or
+    /// the ID hasn't been captured yet (Codex/OpenCode fill it in by polling).
+    pub fn get_agent_session_id(&self, pty_id: u32) -> Result<Option<String>, rusqlite::Error> {
+        let conn = self.conn.lock();
+        let id = conn
+            .query_row(
+                "SELECT agent_session_id FROM sessions WHERE pty_id = ?1",
+                params![pty_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        Ok(id.flatten())
     }
 
     pub fn clear_worktree_path(&self, pty_id: u32) -> Result<(), rusqlite::Error> {
@@ -1275,6 +1289,25 @@ mod tests {
 
         let sessions = db.list_sessions_for_project(pid).unwrap();
         assert_eq!(sessions[0].agent_session_id, Some("thread-abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_get_agent_session_id() {
+        let db = Db::open_in_memory().unwrap();
+        let pid = db.insert_project("app", "/tmp/app").unwrap();
+        for (pty_id, sid) in [(1, Some("uuid-one")), (2, Some("uuid-two")), (3, None)] {
+            db.insert_session(&InsertSession {
+                project_id: pid, pty_id, agent_type: "claude", task_name: "t",
+                working_dir: "/tmp/app", command: "claude", args: "[]",
+                agent_session_id: sid,
+                worktree_path: None, base_commit: None, initial_prompt: None, task_id: None,
+            }).unwrap();
+        }
+
+        assert_eq!(db.get_agent_session_id(1).unwrap().as_deref(), Some("uuid-one"));
+        assert_eq!(db.get_agent_session_id(2).unwrap().as_deref(), Some("uuid-two"));
+        assert_eq!(db.get_agent_session_id(3).unwrap(), None);
+        assert_eq!(db.get_agent_session_id(99).unwrap(), None);
     }
 
     #[test]
