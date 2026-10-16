@@ -6,6 +6,8 @@
     "core:default",
     "core:window:allow-close",
     "core:window:allow-destroy",
+    "core:window:allow-set-background-color",
+    "core:webview:allow-set-webview-background-color",
     "opener:default",
     "dialog:default",
     "notification:default"
