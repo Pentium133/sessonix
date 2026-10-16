@@ -5,6 +5,7 @@ import { SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT } from "../lib/constants";
 import { THEME_IDS, getThemeById, resolveSystemTheme } from "../lib/themes";
 import type { ThemeId } from "../lib/themes";
 import { getSetting, setSetting } from "../lib/api";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export interface LauncherPrefill {
   agent: string;
@@ -77,6 +78,18 @@ function applyTheme(theme: Theme) {
 
   root.setAttribute("data-theme", resolvedId);
   root.style.setProperty("color-scheme", def.type);
+  syncNativeBackground(def.cssVars["--bg"]);
+}
+
+// WKWebView paints its own native background while macOS restores a window
+// from another Space; without this it flashes white until WebKit re-renders.
+function syncNativeBackground(color: string | undefined) {
+  if (!color) return;
+  try {
+    getCurrentWebviewWindow().setBackgroundColor(color).catch(() => {});
+  } catch {
+    // Not running inside Tauri (tests, plain Vite dev server).
+  }
 }
 
 // Cycle order: system → all theme ids → system
