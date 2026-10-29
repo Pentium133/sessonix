@@ -1128,6 +1128,12 @@ body {
   padding: calc(var(--space) * 2);
 }
 
+/* xterm 6 paints the theme background on its scrollable element, but the
+   viewport (inset: 0, over the padding) keeps xterm.css's #000 — let --bg show. */
+.terminal-pane .xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 /* Launcher modal */
 .launcher-overlay {
   position: fixed;
