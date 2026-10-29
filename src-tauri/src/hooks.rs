@@ -502,6 +502,149 @@ mod tests {
         Some(serde_json::from_str(&content).unwrap())
     }
 
+    /// Run the handler for `agent`; `pty` = Some((pty_id, env_agent)) when
+    /// inside a Sessonix PTY. Returns (stdout, status file if written).
+    fn run_handler_io(
+        agent: &str,
+        pty: Option<(&str, &str)>,
+        existing: Option<serde_json::Value>,
+        input: serde_json::Value,
+    ) -> (String, Option<serde_json::Value>) {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".sessonix/hooks");
+        if let Some(existing) = existing {
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("42.json"), existing.to_string()).unwrap();
+        }
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let mut cmd = Command::new("bash");
+        cmd.arg(script).arg(agent).env("HOME", home.path())
+            .env_remove("SESSONIX_PTY_ID").env_remove("SESSONIX_AGENT");
+        if let Some((id, env_agent)) = pty {
+            cmd.env("SESSONIX_PTY_ID", id).env("SESSONIX_AGENT", env_agent);
+        }
+        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        let file = fs::read_to_string(dir.join("42.json")).ok().map(|c| serde_json::from_str(&c).unwrap());
+        (String::from_utf8(out.stdout).unwrap(), file)
+    }
+
+    fn ev(name: &str) -> serde_json::Value {
+        serde_json::json!({"hook_event_name": name, "session_id": "s"})
+    }
+
+    #[test]
+    fn gemini_maps_events() {
+        for (event, want) in [
+            ("BeforeAgent", "running"),
+            ("BeforeTool", "running"),
+            ("AfterTool", "running"),
+            ("PreCompress", "running"),
+            ("AfterAgent", "idle"),
+            ("SessionStart", "idle"),
+            ("SessionEnd", "exited"),
+        ] {
+            let (_, file) = run_handler_io("gemini", Some(("42", "gemini")), None, ev(event));
+            assert_eq!(file.unwrap()["status"], want, "{event}");
+        }
+        let (_, file) = run_handler_io(
+            "gemini",
+            Some(("42", "gemini")),
+            None,
+            serde_json::json!({"hook_event_name": "Notification", "session_id": "s", "notification_type": "ToolPermission"}),
+        );
+        assert_eq!(file.unwrap()["status"], "waiting_permission");
+    }
+
+    #[test]
+    fn gemini_prints_empty_json() {
+        let (out, _) = run_handler_io("gemini", Some(("42", "gemini")), None, ev("BeforeTool"));
+        assert_eq!(out.trim(), "{}");
+        let (out, _) = run_handler_io("gemini", Some(("42", "gemini")), None, ev("BeforeModel"));
+        assert_eq!(out.trim(), "{}");
+    }
+
+    #[test]
+    fn gemini_outside_sessonix_prints_json() {
+        let (out, file) = run_handler_io("gemini", None, None, ev("BeforeTool"));
+        assert_eq!(out.trim(), "{}");
+        assert!(file.is_none());
+        let (out, file) = run_handler_io("gemini", Some(("42", "claude")), None, ev("BeforeTool"));
+        assert_eq!(out.trim(), "{}");
+        assert!(file.is_none());
+    }
+
+    #[test]
+    fn gemini_late_tool_after_after_agent_keeps_idle() {
+        let (_, file) = run_handler_io(
+            "gemini",
+            Some(("42", "gemini")),
+            Some(status_now("AfterAgent", "idle")),
+            ev("AfterTool"),
+        );
+        assert_eq!(file.unwrap()["status"], "idle");
+    }
+
+    #[test]
+    fn cursor_maps_events() {
+        for (event, want) in [
+            ("beforeSubmitPrompt", "running"),
+            ("postToolUse", "running"),
+            ("postToolUseFailure", "running"),
+            ("afterShellExecution", "running"),
+            ("afterMCPExecution", "running"),
+            ("afterFileEdit", "running"),
+            ("preCompact", "running"),
+            ("sessionStart", "idle"),
+            ("sessionEnd", "exited"),
+        ] {
+            let (_, file) = run_handler_io("cursor", Some(("42", "cursor")), None, ev(event));
+            assert_eq!(file.unwrap()["status"], want, "{event}");
+        }
+    }
+
+    #[test]
+    fn cursor_stop_status() {
+        for (status, want) in [("completed", "idle"), ("aborted", "idle"), ("error", "error")] {
+            let (_, file) = run_handler_io(
+                "cursor",
+                Some(("42", "cursor")),
+                None,
+                serde_json::json!({"hook_event_name": "stop", "status": status}),
+            );
+            let file = file.unwrap();
+            assert_eq!(file["status"], want, "{status}");
+            if want == "error" {
+                assert_eq!(file["error"], "agent error");
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_outputs() {
+        let (out, _) = run_handler_io("cursor", Some(("42", "cursor")), None, ev("beforeSubmitPrompt"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap(), serde_json::json!({"continue": true}));
+        let (out, _) = run_handler_io("cursor", Some(("42", "cursor")), None, ev("postToolUse"));
+        assert_eq!(out.trim(), "{}");
+    }
+
+    #[test]
+    fn cursor_outside_sessonix_prints_json() {
+        let (out, file) = run_handler_io("cursor", None, None, ev("beforeSubmitPrompt"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap(), serde_json::json!({"continue": true}));
+        assert!(file.is_none());
+    }
+
+    #[test]
+    fn claude_prints_nothing() {
+        let (out, _) = run_handler_io("claude", Some(("42", "claude")), None, ev("Stop"));
+        assert_eq!(out, "");
+    }
+
     #[test]
     fn handler_ignores_event_from_other_agent() {
         let out = run_handler_as(
