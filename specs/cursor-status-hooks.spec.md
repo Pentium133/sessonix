@@ -36,6 +36,11 @@ Reference (Context7 `/websites/cursor` → cursor.com/docs/hooks, as of 2026-10-
 - For every other agent-`cursor` event the handler prints `{}`; it always exits 0.
   `[@test] ../src-tauri/src/hooks.rs`
 
+## Response without python
+
+- The stdout response is produced by bash builtins before anything else, so it is printed outside Sessonix, without `python3`, and for malformed input; python runs only inside a matching Sessonix PTY to write the status file.
+  `[@test] ../src-tauri/src/hooks.rs`
+
 ## Installation
 
 - `~/.cursor/hooks.json` gets one flat Sessonix entry per event above (`{"command": "bash ~/.sessonix/hook-handler.sh cursor"}`), `"version": 1` set if absent. Merge rules as before (idempotent, order preserved, others kept, malformed refused, atomic, mtime guard, created if missing), adapted to the flat entry shape.

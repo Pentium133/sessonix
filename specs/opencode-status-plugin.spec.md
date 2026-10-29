@@ -25,7 +25,8 @@ Reference (Context7 `/anomalyco/opencode`: plugins.mdx, plugins/migrate-v1.mdx, 
 - No-op unless `process.env.SESSONIX_PTY_ID` is set and `process.env.SESSONIX_AGENT === "opencode"`.
 - Tracks the set of busy session IDs: `session.status` busy/retry adds, idle removes. Status = `running` while any session is busy (a finishing subagent doesn't end the turn); `idle` when the set becomes empty.
 - `permission.asked` → `waiting_permission`; `permission.replied` → `running`.
-- `session.error` → `error` (message from the event's error name, else `agent error`).
+- `session.error` → `error` (message from the event's error name, else `agent error`) only when no other session is busy (a failing subagent doesn't end the parent's turn); the error stays over the `idle` that follows until the next busy.
+- `session.status` / `session.idle` events without a `sessionID` are ignored.
 - Writes `~/.sessonix/hooks/<pty_id>.json` in the shared format (`event`, `status`, `session_id`, `pty_id`, `ts`, `ts_ms`, optional `error`) via temp file + rename; any exception is swallowed (never breaks OpenCode).
 - Exports both API shapes from one default export: `{ id: "sessonix-status", setup(ctx), server() }`.
 - `[@test] ../src/__tests__/opencodeStatusPlugin.test.ts` (Vitest runs the plugin's event logic with a fake event stream and temp HOME).
@@ -33,6 +34,7 @@ Reference (Context7 `/anomalyco/opencode`: plugins.mdx, plugins/migrate-v1.mdx, 
 ## Installation
 
 - Sessonix writes the plugin to `~/.config/opencode/plugins/sessonix-status.js` (directory created) when an OpenCode session is created, only if the content differs (temp + rename); at app start it updates an existing outdated copy. Failures logged only.
+- First install only when `opencode --version` reports 1.18.29 or newer — the first version that loads object plugin entrypoints (migrate-v1.mdx); older loaders call every export as a function and would fail to load the plugin in every OpenCode run.
   `[@test] ../src-tauri/src/hooks.rs`
 - `get_session_status`: OpenCode uses the hook status file first, terminal patterns otherwise.
 

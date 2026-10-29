@@ -16,6 +16,8 @@ import { join } from "node:path";
 // Sessions currently working. Subagents run as further sessions, so the turn
 // is over only when none is busy.
 const busy = new Set();
+// The turn ended on an error: keep showing it over the idle that follows.
+let errored = false;
 
 function write(event, status, sessionID, error) {
   const ptyId = process.env.SESSONIX_PTY_ID;
@@ -46,22 +48,26 @@ function onEvent(event) {
   if (!event || typeof event.type !== "string") return;
   const props = event.properties ?? event;
   const sessionID = props.sessionID;
+  const idle = () => {
+    busy.delete(sessionID);
+    if (busy.size === 0 && !errored) write(event.type, "idle", sessionID);
+  };
   switch (event.type) {
     case "session.status": {
+      if (!sessionID) break;
       const type = props.status?.type;
       if (type === "busy" || type === "retry") {
         busy.add(sessionID);
+        errored = false;
         write(event.type, "running", sessionID);
       } else if (type === "idle") {
-        busy.delete(sessionID);
-        if (busy.size === 0) write(event.type, "idle", sessionID);
+        idle();
       }
       break;
     }
     // Deprecated in favour of session.status, still emitted by older versions.
     case "session.idle":
-      busy.delete(sessionID);
-      if (busy.size === 0) write(event.type, "idle", sessionID);
+      if (sessionID) idle();
       break;
     case "permission.asked":
       write(event.type, "waiting_permission", sessionID);
@@ -71,7 +77,11 @@ function onEvent(event) {
       break;
     case "session.error":
       busy.delete(sessionID);
-      write(event.type, "error", sessionID, props.error?.name || "agent error");
+      // A subagent failing doesn't end the parent's turn.
+      if (busy.size === 0) {
+        errored = true;
+        write(event.type, "error", sessionID, props.error?.name || "agent error");
+      }
       break;
   }
 }

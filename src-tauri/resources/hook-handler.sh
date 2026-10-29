@@ -11,38 +11,32 @@
 #
 # Gemini and Cursor parse the hook's stdout as JSON (Cursor's
 # beforeSubmitPrompt needs {"continue": true}), and these hooks also fire
-# outside Sessonix, so python always runs to print that response; the status
-# file is written only when SESSONIX_WRITE=1.
+# outside Sessonix. The response comes from bash builtins alone, so it is
+# printed even without python3 and costs nothing outside Sessonix.
 HOOK_AGENT="$1"
-WRITE=1
-if [ -z "$SESSONIX_PTY_ID" ]; then
-    WRITE=0
-elif [ -n "$HOOK_AGENT" ] && [ -n "$SESSONIX_AGENT" ] && [ "$HOOK_AGENT" != "$SESSONIX_AGENT" ]; then
-    WRITE=0
-fi
-if [ "$WRITE" = 0 ] && [ "$HOOK_AGENT" != gemini ] && [ "$HOOK_AGENT" != cursor ]; then
+IFS= read -r -d '' INPUT || true
+case "$HOOK_AGENT" in
+    gemini) printf '{}\n' ;;
+    cursor)
+        re='"hook_event_name"[[:space:]]*:[[:space:]]*"beforeSubmitPrompt"'
+        if [[ $INPUT =~ $re ]]; then printf '{"continue": true}\n'; else printf '{}\n'; fi ;;
+esac
+[ -z "$SESSONIX_PTY_ID" ] && exit 0
+if [ -n "$HOOK_AGENT" ] && [ -n "$SESSONIX_AGENT" ] && [ "$HOOK_AGENT" != "$SESSONIX_AGENT" ]; then
     exit 0
 fi
-SESSONIX_HOOK_AGENT="$HOOK_AGENT" SESSONIX_WRITE="$WRITE" python3 -c "
+command -v python3 >/dev/null 2>&1 || exit 0
+printf '%s' "$INPUT" | SESSONIX_HOOK_AGENT="$HOOK_AGENT" python3 -c "
 import sys, json, time, os
 
 agent = os.environ.get('SESSONIX_HOOK_AGENT', '')
 try:
     data = json.load(sys.stdin)
-except ValueError:
-    data = {}
-event = data.get('hook_event_name', '')
-
-# Response on stdout (Claude and Codex expect none).
-if agent == 'gemini':
-    print('{}')
-elif agent == 'cursor':
-    print(json.dumps({'continue': True}) if event == 'beforeSubmitPrompt' else '{}')
-sys.stdout.flush()
-
-try:
     pty_id = os.environ.get('SESSONIX_PTY_ID', '')
-    if os.environ.get('SESSONIX_WRITE') != '1' or not event or not pty_id.isdigit():
+    if not isinstance(data, dict) or not pty_id.isdigit():
+        sys.exit(0)
+    event = data.get('hook_event_name', '')
+    if not event:
         sys.exit(0)
     session_id = data.get('session_id', '') or data.get('conversation_id', '')
     error = None

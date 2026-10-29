@@ -85,6 +85,36 @@ describe("opencode status plugin", () => {
     expect(statusFile()).toMatchObject({ status: "error", error: "ProviderAuthError" });
   });
 
+  it("error survives the idle that follows it", async () => {
+    const hooks = await loadHooks();
+    await hooks.event(status("ses_a", "busy"));
+    await hooks.event({
+      event: { type: "session.error", properties: { sessionID: "ses_a", error: { name: "APIError" } } },
+    });
+    await hooks.event(status("ses_a", "idle"));
+    expect(statusFile()).toMatchObject({ status: "error", error: "APIError" });
+    await hooks.event(status("ses_a", "busy"));
+    expect(statusFile()).toMatchObject({ status: "running" });
+  });
+
+  it("subagent error while the parent is busy keeps running", async () => {
+    const hooks = await loadHooks();
+    await hooks.event(status("ses_parent", "busy"));
+    await hooks.event(status("ses_child", "busy"));
+    await hooks.event({
+      event: { type: "session.error", properties: { sessionID: "ses_child", error: { name: "APIError" } } },
+    });
+    expect(statusFile()).toMatchObject({ status: "running" });
+  });
+
+  it("status without sessionID does not pin running", async () => {
+    const hooks = await loadHooks();
+    await hooks.event({ event: { type: "session.status", properties: { status: { type: "busy" } } } });
+    await hooks.event(status("ses_a", "busy"));
+    await hooks.event(status("ses_a", "idle"));
+    expect(statusFile()).toMatchObject({ status: "idle" });
+  });
+
   it("deprecated session.idle also ends the turn", async () => {
     const hooks = await loadHooks();
     await hooks.event(status("ses_a", "busy"));

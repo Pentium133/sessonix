@@ -280,7 +280,50 @@ pub fn install_opencode_plugin() -> Result<bool, String> {
 #[cfg(unix)]
 pub fn install_opencode_plugin() -> Result<bool, String> {
     let path = opencode_plugin_path().ok_or_else(|| "Cannot find home directory".to_string())?;
+    if !path.exists() {
+        // The plugin loads in every OpenCode run; an unsupported module shape
+        // would be a load error each time, so only install where it's known
+        // to work.
+        let version = std::process::Command::new("opencode")
+            .arg("--version")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        if !opencode_supports_object_plugin(&version) {
+            return Err(format!(
+                "OpenCode {} too old for the status plugin (needs {}.{}.{}+)",
+                version.trim(),
+                OPENCODE_MIN_VERSION.0,
+                OPENCODE_MIN_VERSION.1,
+                OPENCODE_MIN_VERSION.2
+            ));
+        }
+    }
     install_file(&path, OPENCODE_PLUGIN)
+}
+
+/// First OpenCode version that loads object plugin entrypoints (V1 `server()`
+/// on a default-export object); older loaders call every export as a function.
+#[cfg(unix)]
+const OPENCODE_MIN_VERSION: (u32, u32, u32) = (1, 18, 29);
+
+/// Whether `opencode --version` output names a version that supports the
+/// plugin's module shape. Unknown output → false.
+#[cfg(unix)]
+fn opencode_supports_object_plugin(version_output: &str) -> bool {
+    let Some(version) = version_output
+        .split_whitespace()
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    else {
+        return false;
+    };
+    let mut parts = version.trim_start_matches('v').split('.').map(|p| {
+        p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok()
+    });
+    match (parts.next().flatten(), parts.next().flatten(), parts.next().flatten()) {
+        (Some(a), Some(b), Some(c)) => (a, b, c) >= OPENCODE_MIN_VERSION,
+        _ => false,
+    }
 }
 
 /// Update the plugin if a previous version is installed.
@@ -867,6 +910,58 @@ mod tests {
         let (out, file) = run_handler_io("cursor", None, None, ev("beforeSubmitPrompt"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap(), serde_json::json!({"continue": true}));
         assert!(file.is_none());
+    }
+
+    /// Run the handler with a PATH that has no python3 (bash builtins only).
+    fn run_handler_without_python(agent: &str, input: &str) -> String {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let mut child = Command::new("/bin/bash")
+            .arg(script)
+            .arg(agent)
+            .env("HOME", home.path())
+            .env("PATH", "/nonexistent")
+            .env("SESSONIX_PTY_ID", "42")
+            .env("SESSONIX_AGENT", agent)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    #[test]
+    fn gemini_responds_without_python() {
+        assert_eq!(run_handler_without_python("gemini", r#"{"hook_event_name":"BeforeTool"}"#).trim(), "{}");
+    }
+
+    #[test]
+    fn cursor_responds_without_python() {
+        let out = run_handler_without_python("cursor", r#"{"hook_event_name": "beforeSubmitPrompt", "prompt": "x"}"#);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap(), serde_json::json!({"continue": true}));
+        assert_eq!(run_handler_without_python("cursor", r#"{"hook_event_name":"stop"}"#).trim(), "{}");
+    }
+
+    #[test]
+    fn gemini_non_object_input_still_responds() {
+        let (out, file) = run_handler_io("gemini", Some(("42", "gemini")), None, serde_json::json!([1]));
+        assert_eq!(out.trim(), "{}");
+        assert!(file.is_none());
+    }
+
+    #[test]
+    fn opencode_version_gate() {
+        assert!(opencode_supports_object_plugin("1.18.29"));
+        assert!(opencode_supports_object_plugin("opencode 1.19.0"));
+        assert!(opencode_supports_object_plugin("2.0.0\n"));
+        assert!(!opencode_supports_object_plugin("1.18.28"));
+        assert!(!opencode_supports_object_plugin("0.15.3"));
+        assert!(!opencode_supports_object_plugin("garbage"));
     }
 
     #[test]

@@ -33,6 +33,11 @@ Reference (Context7 `/google-gemini/gemini-cli`, docs/hooks/*, docs/reference/co
 - For agent `gemini` the handler prints exactly `{}` on stdout and exits 0, for every event (handled or not).
   `[@test] ../src-tauri/src/hooks.rs`
 
+## Response without python
+
+- The stdout response is produced by bash builtins before anything else, so it is printed outside Sessonix, without `python3`, and for malformed input; python runs only inside a matching Sessonix PTY to write the status file.
+  `[@test] ../src-tauri/src/hooks.rs`
+
 ## Installation
 
 - `~/.gemini/settings.json` gets a Sessonix entry (command `bash ~/.sessonix/hook-handler.sh gemini`, no matcher, no `async`) for: `SessionStart`, `BeforeAgent`, `BeforeTool`, `AfterTool`, `PreCompress`, `AfterAgent`, `Notification`, `SessionEnd`. Same merge rules as Claude/Codex (idempotent, order preserved, others kept, malformed refused, atomic write, mtime guard; file and directory created if missing).
