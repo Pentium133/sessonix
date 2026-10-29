@@ -3,10 +3,17 @@
 # Writes per-session status files to ~/.sessonix/hooks/<pty_id>.json
 # Set SESSONIX_PTY_ID env var when spawning Claude to enable.
 # Event semantics: https://code.claude.com/docs/en/hooks
+# $1 = agent the hook was installed for (claude, codex). Events from an agent
+# other than the one Sessonix spawned in this PTY (e.g. `codex exec` run as a
+# tool inside a Claude session) are ignored.
 PTY_ID="${SESSONIX_PTY_ID}"
 [ -z "$PTY_ID" ] && exit 0
+HOOK_AGENT="$1"
+if [ -n "$HOOK_AGENT" ] && [ -n "$SESSONIX_AGENT" ] && [ "$HOOK_AGENT" != "$SESSONIX_AGENT" ]; then
+    exit 0
+fi
 mkdir -p ~/.sessonix/hooks 2>/dev/null
-python3 -c "
+SESSONIX_HOOK_AGENT="$HOOK_AGENT" python3 -c "
 import sys, json, time, os
 try:
     data = json.load(sys.stdin)
@@ -26,7 +33,10 @@ try:
         'PermissionDenied': 'running',
         'SubagentStart': 'running',
         'PreCompact': 'running',
+        'PostCompact': 'running',
         'Stop': 'idle',
+        # Codex: the user interrupted the active turn (Claude fires nothing).
+        'Interrupt': 'idle',
         # Fires instead of Stop when the turn ends on an API error.
         'StopFailure': 'error',
         'PermissionRequest': 'waiting_permission',
@@ -51,15 +61,21 @@ try:
     # Hooks run async, so a tool event's handler can finish after the Stop or
     # PermissionRequest that followed it. Don't let such a late heartbeat
     # overwrite a fresh turn end / permission wait.
-    if event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart'):
-        try:
-            with open(path) as f:
-                prev = json.load(f)
-            if (prev.get('event') in ('Stop', 'PermissionRequest')
-                    and now_ms - int(prev.get('ts_ms', 0)) < 2000):
-                sys.exit(0)
-        except (OSError, ValueError):
-            pass
+    # Codex also fires SessionStart for subagents mid-turn: never let it end a
+    # running turn. (Claude's SessionStart does reset a stale running state.)
+    try:
+        with open(path) as f:
+            prev = json.load(f)
+    except (OSError, ValueError):
+        prev = {}
+    agent = os.environ.get('SESSONIX_HOOK_AGENT', '')
+    if (agent == 'codex' and event == 'SessionStart' and status == 'idle'
+            and prev.get('status') == 'running'):
+        sys.exit(0)
+    if (event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart')
+            and prev.get('event') in ('Stop', 'Interrupt', 'PermissionRequest')
+            and now_ms - int(prev.get('ts_ms', 0)) < 2000):
+        sys.exit(0)
     out = {
         'event': event,
         'status': status,

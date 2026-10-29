@@ -78,6 +78,24 @@ const HOOK_EVENTS: &[(&str, bool)] = &[
     ("SessionEnd", true),
 ];
 
+/// Codex CLI events Sessonix listens to. Codex has no
+/// Notification/StopFailure; `Interrupt` reports Esc.
+#[cfg(unix)]
+const CODEX_HOOK_EVENTS: &[(&str, bool)] = &[
+    ("SessionStart", true),
+    ("UserPromptSubmit", true),
+    ("PreToolUse", true),
+    ("PostToolUse", true),
+    ("PermissionRequest", true),
+    ("SubagentStart", true),
+    ("PreCompact", true),
+    ("PostCompact", true),
+    ("Stop", true),
+    ("Interrupt", true),
+    // Codex always runs SessionEnd synchronously and warns if marked async.
+    ("SessionEnd", false),
+];
+
 /// Install Sessonix hooks into Claude's settings.json, adding any missing
 /// events and upgrading entries written by older versions. Preserves hooks
 /// from other tools. Always rewrites the handler script.
@@ -95,28 +113,7 @@ pub fn install_hooks() -> Result<bool, String> {
 pub fn install_hooks() -> Result<bool, String> {
     let settings_path = claude_settings_path()
         .ok_or_else(|| "Cannot find Claude config directory".to_string())?;
-
-    let (mut settings, read_at): (serde_json::Value, _) = if settings_path.exists() {
-        let read_at = fs::metadata(&settings_path).and_then(|m| m.modified()).ok();
-        let content = fs::read_to_string(&settings_path)
-            .map_err(|e| format!("Failed to read settings.json: {}", e))?;
-        let value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings.json: {}", e))?;
-        (value, read_at)
-    } else {
-        (serde_json::json!({}), None)
-    };
-    if !settings.is_object() {
-        return Err("settings.json is not an object".to_string());
-    }
-
-    let changed = merge_hooks(&mut settings)?;
-    if changed {
-        let output = serde_json::to_string_pretty(&settings)
-            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        write_settings(&settings_path, &output, read_at)?;
-    }
-
+    let changed = install_into(&settings_path, HOOK_EVENTS, "claude")?;
     install_handler_script()?;
     Ok(changed)
 }
@@ -131,13 +128,7 @@ pub fn upgrade_if_installed() -> Result<bool, String> {
 
 #[cfg(unix)]
 pub fn upgrade_if_installed() -> Result<bool, String> {
-    let Some(settings) = read_claude_settings() else {
-        return Ok(false);
-    };
-    if !is_installed(&settings) || (hooks_complete(&settings) && handler_script_current()) {
-        return Ok(false);
-    }
-    install_hooks().map(|_| true)
+    upgrade_existing(claude_settings_path(), HOOK_EVENTS, "claude", install_hooks)
 }
 
 /// Check if Sessonix hooks are installed and up to date.
@@ -150,13 +141,91 @@ pub fn check_installed() -> bool {
 
 #[cfg(unix)]
 pub fn check_installed() -> bool {
-    read_claude_settings().is_some_and(|s| hooks_complete(&s)) && handler_script_current()
+    claude_settings_path()
+        .and_then(|p| read_json(&p))
+        .is_some_and(|s| hooks_complete(&s, HOOK_EVENTS, "claude"))
+        && handler_script_current()
+}
+
+/// Install Sessonix hooks into Codex's `hooks.json` (same merge rules as
+/// Claude). Codex runs them only after the user trusts them via `/hooks`;
+/// Sessonix never touches that trust state. Returns whether the file changed.
+#[cfg(windows)]
+pub fn install_codex_hooks() -> Result<bool, String> {
+    Ok(false)
 }
 
 #[cfg(unix)]
-fn read_claude_settings() -> Option<serde_json::Value> {
-    let content = fs::read_to_string(claude_settings_path()?).ok()?;
-    serde_json::from_str(&content).ok()
+pub fn install_codex_hooks() -> Result<bool, String> {
+    let path = codex_hooks_path().ok_or_else(|| "Cannot find Codex config directory".to_string())?;
+    let changed = install_into(&path, CODEX_HOOK_EVENTS, "codex")?;
+    install_handler_script()?;
+    Ok(changed)
+}
+
+/// Upgrade Sessonix Codex hooks if present and outdated.
+#[cfg(windows)]
+pub fn upgrade_codex_if_installed() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn upgrade_codex_if_installed() -> Result<bool, String> {
+    upgrade_existing(codex_hooks_path(), CODEX_HOOK_EVENTS, "codex", install_codex_hooks)
+}
+
+/// Re-run `install` when `path` already holds Sessonix hooks but they (or the
+/// handler script) are out of date.
+#[cfg(unix)]
+fn upgrade_existing(
+    path: Option<PathBuf>,
+    events: &[(&str, bool)],
+    agent: &str,
+    install: fn() -> Result<bool, String>,
+) -> Result<bool, String> {
+    let Some(settings) = path.and_then(|p| read_json(&p)) else {
+        return Ok(false);
+    };
+    if !is_installed(&settings) || (hooks_complete(&settings, events, agent) && handler_script_current()) {
+        return Ok(false);
+    }
+    install().map(|_| true)
+}
+
+/// Merge Sessonix hooks for `events` into the JSON file at `path` (created,
+/// with its directory, if missing). Returns whether the file changed.
+#[cfg(unix)]
+fn install_into(path: &std::path::Path, events: &[(&str, bool)], agent: &str) -> Result<bool, String> {
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    let (mut settings, read_at): (serde_json::Value, _) = if path.exists() {
+        let read_at = fs::metadata(path).and_then(|m| m.modified()).ok();
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read {}: {}", name, e))?;
+        let value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse {}: {}", name, e))?;
+        (value, read_at)
+    } else {
+        (serde_json::json!({}), None)
+    };
+    if !settings.is_object() {
+        return Err(format!("{} is not an object", name));
+    }
+
+    let changed = merge_hooks(&mut settings, events, agent)?;
+    if changed {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+        }
+        let output = serde_json::to_string_pretty(&settings)
+            .map_err(|e| format!("Failed to serialize {}: {}", name, e))?;
+        write_settings(path, &output, read_at)?;
+    }
+    Ok(changed)
+}
+
+#[cfg(unix)]
+fn read_json(path: &std::path::Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 #[cfg(unix)]
@@ -191,33 +260,56 @@ fn write_settings(
     })
 }
 
+/// Hook command for `agent`. The handler ignores events whose agent differs
+/// from the PTY's `SESSONIX_AGENT`, so e.g. a `codex exec` run as a tool
+/// inside a Claude session can't rewrite that session's status.
+#[cfg(unix)]
+fn agent_command(agent: &str) -> String {
+    format!("{} {}", HOOK_COMMAND, agent)
+}
+
+/// Our handler, with or without an agent argument (older installs had none).
+#[cfg(unix)]
+fn is_our_command(hook: &serde_json::Value) -> bool {
+    hook.get("command").and_then(|c| c.as_str()).is_some_and(|c| {
+        c == HOOK_COMMAND || c.strip_prefix(HOOK_COMMAND).is_some_and(|rest| rest.starts_with(' '))
+    })
+}
+
 /// A hook-config entry (`{"matcher"?, "hooks": [...]}`) that runs our command.
 #[cfg(unix)]
 fn entry_is_ours(entry: &serde_json::Value) -> bool {
     entry
         .get("hooks")
         .and_then(|h| h.as_array())
-        .is_some_and(|hooks| {
-            hooks
-                .iter()
-                .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND))
-        })
+        .is_some_and(|hooks| hooks.iter().any(is_our_command))
 }
 
-/// Add a Sessonix entry for every event in [`HOOK_EVENTS`] that lacks one and
+/// Our handler entry is exactly what this version installs for the event.
+#[cfg(unix)]
+fn our_hook_current(hook: &serde_json::Value, agent: &str, is_async: bool) -> bool {
+    hook.get("command").and_then(|c| c.as_str()) == Some(agent_command(agent).as_str())
+        && hook.get("async").and_then(|a| a.as_bool()).unwrap_or(false) == is_async
+}
+
+/// Add a Sessonix entry for every event in `events` that lacks one and
 /// drop the matcher older versions set on the Notification entry. Returns
 /// whether `settings` changed. Refuses (leaving `settings` untouched) when
 /// `hooks` or an event's value has an unexpected shape rather than replace
 /// the user's data.
 #[cfg(unix)]
-fn merge_hooks(settings: &mut serde_json::Value) -> Result<bool, String> {
+fn merge_hooks(
+    settings: &mut serde_json::Value,
+    events: &[(&str, bool)],
+    agent: &str,
+) -> Result<bool, String> {
     match settings.get("hooks") {
         None => {}
         Some(h) if h.is_object() => {}
         Some(_) => return Err("settings.json: \"hooks\" is not an object".to_string()),
     }
     if let Some(hooks) = settings.get("hooks").and_then(|h| h.as_object()) {
-        for (event, _) in HOOK_EVENTS {
+        for (event, _) in events {
             if hooks.get(*event).is_some_and(|v| !v.is_array()) {
                 return Err(format!("settings.json: hooks.{} is not an array", event));
             }
@@ -231,7 +323,7 @@ fn merge_hooks(settings: &mut serde_json::Value) -> Result<bool, String> {
     }
     let hooks = settings["hooks"].as_object_mut().expect("hooks is an object");
 
-    for &(event, is_async) in HOOK_EVENTS {
+    for &(event, is_async) in events {
         let entries = hooks
             .entry(event)
             .or_insert_with(|| serde_json::json!([]))
@@ -241,12 +333,26 @@ fn merge_hooks(settings: &mut serde_json::Value) -> Result<bool, String> {
         let mut found = false;
         for entry in entries.iter_mut().filter(|e| entry_is_ours(e)) {
             found = true;
-            if let Some(obj) = entry.as_object_mut() {
-                changed |= obj.remove("matcher").is_some();
+            let Some(obj) = entry.as_object_mut() else { continue };
+            changed |= obj.remove("matcher").is_some();
+            // Bring entries from older versions to the current command/async.
+            let Some(hooks) = obj.get_mut("hooks").and_then(|h| h.as_array_mut()) else { continue };
+            for hook in hooks.iter_mut().filter(|h| is_our_command(h)) {
+                if our_hook_current(hook, agent, is_async) {
+                    continue;
+                }
+                let Some(h) = hook.as_object_mut() else { continue };
+                h.insert("command".into(), serde_json::json!(agent_command(agent)));
+                if is_async {
+                    h.insert("async".into(), serde_json::json!(true));
+                } else {
+                    h.remove("async");
+                }
+                changed = true;
             }
         }
         if !found {
-            let mut hook = serde_json::json!({ "type": "command", "command": HOOK_COMMAND });
+            let mut hook = serde_json::json!({ "type": "command", "command": agent_command(agent) });
             if is_async {
                 hook["async"] = serde_json::json!(true);
             }
@@ -257,13 +363,22 @@ fn merge_hooks(settings: &mut serde_json::Value) -> Result<bool, String> {
     Ok(changed)
 }
 
-/// Every event in [`HOOK_EVENTS`] has a Sessonix entry, none with a matcher.
+/// Every event in `events` has a Sessonix entry, none with a matcher.
 #[cfg(unix)]
-fn hooks_complete(settings: &serde_json::Value) -> bool {
-    HOOK_EVENTS.iter().all(|(event, _)| {
-        settings["hooks"][*event].as_array().is_some_and(|entries| {
+fn hooks_complete(settings: &serde_json::Value, events: &[(&str, bool)], agent: &str) -> bool {
+    events.iter().all(|&(event, is_async)| {
+        settings["hooks"][event].as_array().is_some_and(|entries| {
             let ours: Vec<_> = entries.iter().filter(|e| entry_is_ours(e)).collect();
-            !ours.is_empty() && ours.iter().all(|e| e.get("matcher").is_none())
+            !ours.is_empty()
+                && ours.iter().all(|e| {
+                    e.get("matcher").is_none()
+                        && e["hooks"].as_array().is_some_and(|hooks| {
+                            hooks
+                                .iter()
+                                .filter(|h| is_our_command(h))
+                                .all(|h| our_hook_current(h, agent, is_async))
+                        })
+                })
         })
     })
 }
@@ -281,6 +396,23 @@ fn is_installed(settings: &serde_json::Value) -> bool {
         })
 }
 
+/// Replace the script only when its content differs, via temp file + rename:
+/// a hook of another session may be executing it right now, and bash reads
+/// scripts incrementally. Returns whether it was written.
+#[cfg(unix)]
+fn write_script_if_changed(path: &std::path::Path, content: &str) -> Result<bool, String> {
+    if fs::read_to_string(path).is_ok_and(|current| current == content) {
+        return Ok(false);
+    }
+    let tmp = path.with_extension(format!("sh.{}.tmp", std::process::id()));
+    fs::write(&tmp, content).map_err(|e| format!("Failed to write hook-handler.sh: {}", e))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Failed to write hook-handler.sh: {}", e)
+    })?;
+    Ok(true)
+}
+
 /// Install the hook handler script to ~/.sessonix/
 #[cfg(unix)]
 fn install_handler_script() -> Result<(), String> {
@@ -290,9 +422,7 @@ fn install_handler_script() -> Result<(), String> {
 
     let script_path = dir.join("hook-handler.sh");
 
-    // Always overwrite with latest version
-    fs::write(&script_path, HANDLER_SCRIPT)
-        .map_err(|e| format!("Failed to write hook-handler.sh: {}", e))?;
+    write_script_if_changed(&script_path, HANDLER_SCRIPT)?;
 
     // Make executable
     #[cfg(unix)]
@@ -308,6 +438,16 @@ fn install_handler_script() -> Result<(), String> {
         .map_err(|e| format!("Failed to create hooks dir: {}", e))?;
 
     Ok(())
+}
+
+/// `$CODEX_HOME/hooks.json`, defaulting to `~/.codex/hooks.json`.
+#[cfg(unix)]
+fn codex_hooks_path() -> Option<PathBuf> {
+    let home = match std::env::var_os("CODEX_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs::home_dir()?.join(".codex"),
+    };
+    Some(home.join("hooks.json"))
 }
 
 #[cfg(unix)]
@@ -329,6 +469,100 @@ fn hooks_dir() -> PathBuf {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// Run the bundled handler as installed for `agent` inside a PTY spawned
+    /// for `env_agent`, over an optional existing status file.
+    fn run_handler_as(
+        agent: &str,
+        env_agent: &str,
+        existing: Option<serde_json::Value>,
+        input: serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".sessonix/hooks");
+        if let Some(existing) = existing {
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("42.json"), existing.to_string()).unwrap();
+        }
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let mut child = Command::new("bash")
+            .arg(script)
+            .arg(agent)
+            .env("HOME", home.path())
+            .env("SESSONIX_PTY_ID", "42")
+            .env("SESSONIX_AGENT", env_agent)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+        let content = fs::read_to_string(dir.join("42.json")).ok()?;
+        Some(serde_json::from_str(&content).unwrap())
+    }
+
+    #[test]
+    fn handler_ignores_event_from_other_agent() {
+        let out = run_handler_as(
+            "codex",
+            "claude",
+            None,
+            serde_json::json!({"hook_event_name": "Stop", "session_id": "s"}),
+        );
+        assert_eq!(out, None);
+    }
+
+    #[test]
+    fn handler_claude_session_start_resets_running() {
+        let out = run_handler_as(
+            "claude",
+            "claude",
+            Some(status_now("PreToolUse", "running")),
+            serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s", "source": "clear"}),
+        )
+        .unwrap();
+        assert_eq!(out["status"], "idle");
+    }
+
+    #[test]
+    fn handler_codex_session_start_does_not_override_running() {
+        let out = run_handler_as(
+            "codex",
+            "codex",
+            Some(status_now("PreToolUse", "running")),
+            serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}),
+        )
+        .unwrap();
+        assert_eq!(out["status"], "running");
+    }
+
+    #[test]
+    fn commands_carry_agent_name() {
+        let mut claude = serde_json::json!({});
+        merge_hooks(&mut claude, HOOK_EVENTS, "claude").unwrap();
+        assert_eq!(sessonix_entries(&claude, "Stop")[0]["hooks"][0]["command"], "bash ~/.sessonix/hook-handler.sh claude");
+        let mut codex = serde_json::json!({});
+        merge_hooks(&mut codex, CODEX_HOOK_EVENTS, "codex").unwrap();
+        assert_eq!(sessonix_entries(&codex, "Stop")[0]["hooks"][0]["command"], "bash ~/.sessonix/hook-handler.sh codex");
+    }
+
+    #[test]
+    fn codex_session_end_is_sync() {
+        let mut codex = serde_json::json!({});
+        merge_hooks(&mut codex, CODEX_HOOK_EVENTS, "codex").unwrap();
+        assert_eq!(sessonix_entries(&codex, "SessionEnd")[0]["hooks"][0].get("async"), None);
+    }
+
+    #[test]
+    fn script_write_skipped_when_current() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook-handler.sh");
+        assert!(write_script_if_changed(&path, "a").unwrap());
+        assert!(!write_script_if_changed(&path, "a").unwrap());
+        assert!(write_script_if_changed(&path, "b").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "b");
+    }
 
     /// Run the bundled handler with `input` on stdin; return the status file it wrote.
     fn run_handler(input: serde_json::Value) -> Option<serde_json::Value> {
@@ -478,18 +712,18 @@ mod tests {
     #[test]
     fn merge_into_empty_adds_all_events() {
         let mut settings = serde_json::json!({});
-        assert!(merge_hooks(&mut settings).unwrap());
+        assert!(merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap());
         for (event, _) in HOOK_EVENTS {
             assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
         }
-        assert!(hooks_complete(&settings));
+        assert!(hooks_complete(&settings, HOOK_EVENTS, "claude"));
     }
 
     #[test]
     fn upgrade_old_install() {
         let mut settings = old_install();
-        assert!(!hooks_complete(&settings));
-        assert!(merge_hooks(&mut settings).unwrap());
+        assert!(!hooks_complete(&settings, HOOK_EVENTS, "claude"));
+        assert!(merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap());
         for (event, _) in HOOK_EVENTS {
             assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
         }
@@ -499,24 +733,24 @@ mod tests {
         assert_eq!(settings["model"], "opus");
         assert_eq!(sessonix_entries(&settings, "PreCompact")[0]["hooks"][0].get("async"), None);
         assert_eq!(sessonix_entries(&settings, "PreToolUse")[0]["hooks"][0]["async"], true);
-        assert!(hooks_complete(&settings));
+        assert!(hooks_complete(&settings, HOOK_EVENTS, "claude"));
     }
 
     #[test]
     fn merge_is_idempotent() {
         let mut settings = old_install();
-        merge_hooks(&mut settings).unwrap();
+        merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap();
         let snapshot = settings.clone();
-        assert!(!merge_hooks(&mut settings).unwrap());
+        assert!(!merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap());
         assert_eq!(settings, snapshot);
     }
 
     #[test]
     fn hooks_complete_false_when_event_missing() {
         let mut settings = serde_json::json!({});
-        merge_hooks(&mut settings).unwrap();
+        merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap();
         settings["hooks"].as_object_mut().unwrap().remove("StopFailure");
-        assert!(!hooks_complete(&settings));
+        assert!(!hooks_complete(&settings, HOOK_EVENTS, "claude"));
     }
 
     /// Run the handler with a pre-existing status file in a fresh HOME.
@@ -618,7 +852,7 @@ mod tests {
     fn merge_preserves_key_order() {
         let mut settings: serde_json::Value =
             serde_json::from_str(r#"{"zeta": 1, "alpha": 2, "hooks": {"Stop": []}}"#).unwrap();
-        merge_hooks(&mut settings).unwrap();
+        merge_hooks(&mut settings, HOOK_EVENTS, "claude").unwrap();
         let out = serde_json::to_string(&settings).unwrap();
         assert!(out.find("zeta").unwrap() < out.find("alpha").unwrap(), "{out}");
     }
@@ -626,14 +860,14 @@ mod tests {
     #[test]
     fn merge_rejects_non_object_hooks() {
         let mut settings = serde_json::json!({"hooks": ["user", "data"]});
-        assert!(merge_hooks(&mut settings).is_err());
+        assert!(merge_hooks(&mut settings, HOOK_EVENTS, "claude").is_err());
         assert_eq!(settings, serde_json::json!({"hooks": ["user", "data"]}));
     }
 
     #[test]
     fn merge_rejects_non_array_event() {
         let mut settings = serde_json::json!({"hooks": {"Stop": {"weird": true}}});
-        assert!(merge_hooks(&mut settings).is_err());
+        assert!(merge_hooks(&mut settings, HOOK_EVENTS, "claude").is_err());
         assert_eq!(settings["hooks"]["Stop"], serde_json::json!({"weird": true}));
     }
 
@@ -659,6 +893,89 @@ mod tests {
         fs::write(&path, "{\"changed\":true}").unwrap();
         assert!(write_settings(&path, "{}", Some(read_at)).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"changed\":true}");
+    }
+
+    fn status_now(event: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "event": event, "status": status, "session_id": "s", "pty_id": 42,
+            "ts": now_ms() / 1000, "ts_ms": now_ms()
+        })
+    }
+
+    #[test]
+    fn handler_maps_interrupt_to_idle() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "Interrupt", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn handler_maps_post_compact_to_running() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "PostCompact", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn handler_session_start_sets_idle_when_not_running() {
+        let out = run_handler_over(
+            status_now("Stop", "idle"),
+            serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}),
+        );
+        assert_eq!(out["status"], "idle");
+        assert_eq!(out["event"], "SessionStart");
+    }
+
+    #[test]
+    fn handler_late_tool_event_does_not_override_fresh_interrupt() {
+        let out = run_handler_over(
+            status_now("Interrupt", "idle"),
+            serde_json::json!({"hook_event_name": "PostToolUse", "session_id": "s"}),
+        );
+        assert_eq!(out["status"], "idle");
+    }
+
+    #[test]
+    fn codex_merge_into_empty() {
+        let mut settings = serde_json::json!({});
+        assert!(merge_hooks(&mut settings, CODEX_HOOK_EVENTS, "codex").unwrap());
+        for (event, _) in CODEX_HOOK_EVENTS {
+            let ours = sessonix_entries(&settings, event);
+            assert_eq!(ours.len(), 1, "{event}");
+        }
+        assert!(hooks_complete(&settings, CODEX_HOOK_EVENTS, "codex"));
+        assert!(settings["hooks"].get("Notification").is_none());
+    }
+
+    #[test]
+    fn codex_merge_keeps_user_hooks() {
+        let mut settings = serde_json::json!({
+            "description": "mine",
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}
+        });
+        merge_hooks(&mut settings, CODEX_HOOK_EVENTS, "codex").unwrap();
+        assert_eq!(settings["description"], "mine");
+        let stop = settings["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "say done");
+    }
+
+    #[test]
+    fn install_into_creates_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/hooks.json");
+        assert!(install_into(&path, CODEX_HOOK_EVENTS, "codex").unwrap());
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(hooks_complete(&written, CODEX_HOOK_EVENTS, "codex"));
+    }
+
+    #[test]
+    fn install_into_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.json");
+        install_into(&path, CODEX_HOOK_EVENTS, "codex").unwrap();
+        let first = fs::read_to_string(&path).unwrap();
+        assert!(!install_into(&path, CODEX_HOOK_EVENTS, "codex").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), first);
     }
 
     #[test]

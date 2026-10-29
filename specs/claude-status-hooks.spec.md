@@ -65,6 +65,7 @@ Reference: Claude Code hooks docs (code.claude.com/docs/en/hooks, hooks-guide), 
   `[@test] ../src-tauri/src/hooks.rs`
 - On app start, if Sessonix hooks are present but outdated, they are upgraded automatically (the user consented on first install). Never installs from scratch without the user.
 - Sync/async: `PreCompact` stays sync; all others async.
+- The Claude hook command is `bash ~/.sessonix/hook-handler.sh claude`; entries from older versions (no agent argument) are upgraded in place. See agent scoping in `codex-status-hooks.spec.md`.
 
 ## Out of scope
 

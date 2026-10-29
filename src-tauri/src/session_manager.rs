@@ -190,6 +190,12 @@ impl SessionManager {
         let is_claude = params.agent_type == "claude";
         let is_codex = params.agent_type == "codex";
         let is_opencode = params.agent_type == "opencode";
+        if is_codex {
+            // Status hooks; Codex runs them once the user trusts them (/hooks).
+            if let Err(e) = crate::hooks::install_codex_hooks() {
+                log::warn!("Failed to install Codex hooks: {}", e);
+            }
+        }
         let is_resume = params.args.iter().any(|a| a == "--resume");
         let is_continue = params.args.iter().any(|a| a == "--continue");
         let agent_session_id = if is_claude && !is_resume && !is_continue {
@@ -252,6 +258,7 @@ impl SessionManager {
             pty_cwd,
             params.cols,
             params.rows,
+            params.agent_type,
             params.app_handle,
         )?;
 
