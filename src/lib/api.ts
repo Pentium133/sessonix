@@ -167,6 +167,14 @@ export async function setSortOrder(
   return invoke<void>("set_sort_order", { ptyId, sortOrder });
 }
 
+export async function sendSessionNotificationNative(
+  title: string,
+  body: string,
+  sessionId: number
+): Promise<void> {
+  return invoke<void>("send_session_notification", { title, body, sessionId });
+}
+
 export async function notifySessionExit(ptyId: number): Promise<void> {
   return invoke<void>("notify_session_exit", { ptyId });
 }

@@ -3971,6 +3971,8 @@ dependencies = [
  "fix-path-env",
  "git2",
  "log",
+ "objc2",
+ "objc2-foundation",
  "parking_lot",
  "portable-pty",
  "regex",

@@ -2,13 +2,13 @@ import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
-  onAction,
 } from "@tauri-apps/plugin-notification";
+import { listen } from "@tauri-apps/api/event";
 import { showToast } from "../components/Toast";
 import { useUiStore } from "../store/uiStore";
 import { useProjectStore } from "../store/projectStore";
 import { useSessionStore } from "../store/sessionStore";
-import { getSetting, setSetting } from "./api";
+import { getSetting, setSetting, sendSessionNotificationNative } from "./api";
 import type { AgentType } from "./types";
 
 const AGENT_LABELS: Record<AgentType, string> = {
@@ -82,8 +82,8 @@ export async function requestNotificationPermission(): Promise<boolean> {
  *  - Window is not focused (user is in another app)
  *  - Window is focused but session is in a different project (user can't see it)
  *
- * Embeds sessionId and projectPath in `extra` so the click handler
- * can navigate directly to the triggering session.
+ * With a sessionId the backend delivers it and reports clicks as
+ * `notification-clicked`, so the click handler can open that session.
  */
 export function sendSessionNotification(
   title: string,
@@ -111,12 +111,13 @@ export function sendSessionNotification(
     return;
   }
 
+  if (sessionId != null) {
+    sendSessionNotificationNative(title, body, sessionId).catch(console.error);
+    return;
+  }
+
   try {
-    sendNotification({
-      title,
-      body,
-      extra: sessionId != null ? { sessionId: String(sessionId) } : undefined,
-    });
+    sendNotification({ title, body });
   } catch {
     // Silently ignore — notification is non-critical
   }
@@ -129,10 +130,8 @@ export function setupNotificationClickHandler(): void {
   if (clickHandlerRegistered) return;
   clickHandlerRegistered = true;
 
-  onAction((notification) => {
-    const raw = notification.extra?.sessionId;
-    const sessionId = typeof raw === "number" ? raw : parseInt(String(raw ?? ""), 10);
-    if (isNaN(sessionId)) return;
+  listen<{ sessionId: number }>("notification-clicked", (event) => {
+    const { sessionId } = event.payload;
 
     const sessionStore = useSessionStore.getState();
     const projectStore = useProjectStore.getState();
