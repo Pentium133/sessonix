@@ -6,7 +6,7 @@ vi.mock("../lib/api", () => ({
   createSession: vi.fn().mockResolvedValue(100),
   killSession: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
-  attachSession: vi.fn().mockResolvedValue([]),
+  attachSession: vi.fn().mockResolvedValue(undefined),
   detachSession: vi.fn().mockResolvedValue(undefined),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
@@ -21,9 +21,15 @@ vi.mock("../lib/terminalPool", () => ({
   writeToTerminal: vi.fn(),
 }));
 
+vi.mock("../lib/ptyOutput", () => ({
+  ensurePtyOutputSubscribed: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { useSessionStore } from "../store/sessionStore";
 import { useProjectStore } from "../store/projectStore";
 import * as api from "../lib/api";
+import { ensurePtyOutputSubscribed } from "../lib/ptyOutput";
+import { writeToTerminal } from "../lib/terminalPool";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -203,6 +209,35 @@ describe("sessionStore", () => {
   // ─── addSession ─────────────────────────────────────────────
 
   describe("addSession", () => {
+    it("subscribes before createSession", async () => {
+      seedProject("/tmp/app", []);
+
+      await useSessionStore.getState().addSession({
+        command: "claude",
+        working_dir: "/tmp/app",
+        agent_type: "claude",
+      });
+
+      expect(ensurePtyOutputSubscribed).toHaveBeenCalled();
+      expect(vi.mocked(ensurePtyOutputSubscribed).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(api.createSession).mock.invocationCallOrder[0],
+      );
+    });
+
+    it("fails when subscription fails", async () => {
+      seedProject("/tmp/app", []);
+      vi.mocked(ensurePtyOutputSubscribed).mockRejectedValueOnce(new Error("sub"));
+
+      await expect(
+        useSessionStore.getState().addSession({
+          command: "claude",
+          working_dir: "/tmp/app",
+          agent_type: "claude",
+        }),
+      ).rejects.toThrow("sub");
+      expect(api.createSession).not.toHaveBeenCalled();
+    });
+
     it("stores the agent session ID the backend generated for the new PTY", async () => {
       seedProject("/tmp/app", []);
       vi.mocked(api.createSession).mockResolvedValue(11);
@@ -491,6 +526,45 @@ describe("sessionStore", () => {
   // ─── switchSession ──────────────────────────────────────────
 
   describe("switchSession", () => {
+    it("subscribes before attach", async () => {
+      seedSessions([
+        makeSession({ id: 1, status: "running" }),
+        makeSession({ id: 2, status: "running", sortOrder: 2 }),
+      ], 1);
+
+      await useSessionStore.getState().switchSession(2);
+
+      expect(vi.mocked(ensurePtyOutputSubscribed).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(api.attachSession).mock.invocationCallOrder[0],
+      );
+    });
+
+    it("fails before detaching when subscription fails", async () => {
+      seedSessions([
+        makeSession({ id: 1, status: "running" }),
+        makeSession({ id: 2, status: "running", sortOrder: 2 }),
+      ], 1);
+      vi.mocked(ensurePtyOutputSubscribed).mockRejectedValueOnce(new Error("sub"));
+
+      await expect(useSessionStore.getState().switchSession(2)).rejects.toThrow("sub");
+
+      expect(api.detachSession).not.toHaveBeenCalled();
+      expect(api.attachSession).not.toHaveBeenCalled();
+      expect(useSessionStore.getState().activeSessionId).toBe(1);
+    });
+
+    it("does not write replay", async () => {
+      seedSessions([
+        makeSession({ id: 1, status: "running" }),
+        makeSession({ id: 2, status: "running", sortOrder: 2 }),
+      ], 1);
+      vi.mocked(api.attachSession).mockResolvedValueOnce([1, 2] as unknown as void);
+
+      await useSessionStore.getState().switchSession(2);
+
+      expect(writeToTerminal).not.toHaveBeenCalled();
+    });
+
     it("updates activeSessionId", async () => {
       seedSessions([
         makeSession({ id: 1 }),

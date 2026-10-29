@@ -6,7 +6,7 @@ vi.mock("../lib/api", () => ({
   createSession: vi.fn(),
   killSession: vi.fn(),
   deleteSession: vi.fn(),
-  attachSession: vi.fn().mockResolvedValue([]),
+  attachSession: vi.fn().mockResolvedValue(undefined),
   detachSession: vi.fn(),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
@@ -14,6 +14,10 @@ vi.mock("../lib/api", () => ({
   checkClaudeHooks: vi.fn(),
   reorderSession: vi.fn(),
   setSortOrder: vi.fn(),
+}));
+
+vi.mock("../lib/ptyOutput", () => ({
+  ensurePtyOutputSubscribed: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../lib/terminalPool", () => ({

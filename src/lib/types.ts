@@ -66,11 +66,6 @@ export interface GitStatus {
   is_worktree: boolean;
 }
 
-export interface PtyOutputPayload {
-  id: number;
-  data: number[];
-}
-
 export interface PtyExitPayload {
   id: number;
 }

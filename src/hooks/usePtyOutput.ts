@@ -1,21 +1,17 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { writeToTerminal } from "../lib/terminalPool";
+import { ensurePtyOutputSubscribed } from "../lib/ptyOutput";
 import { notifySessionExit } from "../lib/api";
 import { getGitStatus, removeWorktree, clearWorktreePath } from "../lib/git";
 import { useSessionStore } from "../store/sessionStore";
 import { useSettingsStore } from "../store/settingsStore";
 import { sendSessionNotification, agentLabel } from "../lib/notifications";
 import { showToast } from "../components/Toast";
-import type { PtyOutputPayload, PtyExitPayload } from "../lib/types";
+import type { PtyExitPayload } from "../lib/types";
 
 export function usePtyOutput() {
   useEffect(() => {
-    const unlistenOutput = listen<PtyOutputPayload>("pty-output", (event) => {
-      const { id, data } = event.payload;
-      const bytes = new Uint8Array(data);
-      writeToTerminal(id, bytes);
-    });
+    ensurePtyOutputSubscribed().catch(console.error);
 
     const unlistenExit = listen<PtyExitPayload>("pty-exit", (event) => {
       const id = event.payload.id;
@@ -74,7 +70,6 @@ export function usePtyOutput() {
     });
 
     return () => {
-      unlistenOutput.then((fn) => fn());
       unlistenExit.then((fn) => fn());
     };
   }, []); // truly stable — no deps, reads store directly

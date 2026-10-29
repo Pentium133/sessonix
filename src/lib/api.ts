@@ -30,8 +30,8 @@ export async function detachSession(id: number): Promise<void> {
   return invoke<void>("detach_session", { id });
 }
 
-export async function attachSession(id: number): Promise<number[]> {
-  return invoke<number[]>("attach_session", { id });
+export async function attachSession(id: number): Promise<void> {
+  return invoke<void>("attach_session", { id });
 }
 
 export async function subscribePtyOutput(

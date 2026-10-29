@@ -8,7 +8,7 @@ vi.mock("../lib/api", () => ({
   createSession: vi.fn().mockResolvedValue(100),
   killSession: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(undefined),
-  attachSession: vi.fn().mockResolvedValue([]),
+  attachSession: vi.fn().mockResolvedValue(undefined),
   detachSession: vi.fn().mockResolvedValue(undefined),
   listProjects: vi.fn().mockResolvedValue([]),
   listSessions: vi.fn().mockResolvedValue([]),
@@ -32,6 +32,10 @@ vi.mock("../lib/api", () => ({
   getAllSettings: vi.fn().mockResolvedValue([]),
   checkForUpdate: vi.fn().mockResolvedValue(null),
   detectAgents: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock("../lib/ptyOutput", () => ({
+  ensurePtyOutputSubscribed: vi.fn().mockResolvedValue(undefined),
 }));
 
 import Sidebar from "../components/Sidebar";
