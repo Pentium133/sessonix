@@ -96,14 +96,19 @@ impl OutputBatcher {
         batcher
     }
 
-    /// Record PTY output: always into the ring buffer, and into the pending
-    /// batch for live delivery. Ignored after `close`.
+    /// Record PTY output: always into the ring buffer, and (while attached)
+    /// into the pending batch for live delivery. Ignored after `close`.
     pub fn record(&self, data: &[u8]) {
         let mut st = self.state.lock();
         if st.closed {
             return;
         }
         st.ring.write(data);
+        // Detached output lives only in the ring buffer; attach replays it.
+        // Queuing it too would send it a second time after attach.
+        if !st.attached {
+            return;
+        }
         st.pending.extend_from_slice(data);
         if st.first_at.is_none() {
             st.first_at = Some(Instant::now());
@@ -276,6 +281,16 @@ mod tests {
         settle();
         assert!(sink.0.lock().is_empty());
         assert_eq!(b.attach_and_drain(), b"x".to_vec());
+    }
+
+    #[test]
+    fn attach_right_after_detached_output_does_not_resend() {
+        let (b, sink) = batcher_with_sink();
+        b.detach();
+        b.record(b"xyz");
+        assert_eq!(b.attach_and_drain(), b"xyz".to_vec());
+        settle();
+        assert!(sink.0.lock().is_empty());
     }
 
     #[test]
