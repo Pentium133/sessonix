@@ -6,7 +6,12 @@ import "@xterm/xterm/css/xterm.css";
 import { writeToSession, resizeSession, saveScrollback, getScrollback } from "../lib/api";
 import { useSettingsStore } from "../store/settingsStore";
 import { getThemeById, resolveSystemTheme } from "../lib/themes";
-import { loadUnicodeWidths, loadWebglRenderer } from "../lib/terminalRenderer";
+import {
+  loadUnicodeWidths,
+  loadWebglRenderer,
+  onFontsLoaded,
+  preloadTerminalFonts,
+} from "../lib/terminalRenderer";
 import {
   MAX_LIVE_TERMINALS,
   type TerminalInstance,
@@ -73,6 +78,7 @@ export default function TerminalPane({
 
   // Live-update font settings on all active terminals
   useEffect(() => {
+    preloadTerminalFonts(terminalFontFamily, terminalFontSize);
     for (const [, inst] of poolEntries()) {
       if (inst.disposed) continue;
       inst.terminal.options.fontSize = terminalFontSize;
@@ -81,12 +87,27 @@ export default function TerminalPane({
     }
   }, [terminalFontSize, terminalFontFamily]);
 
+  // The WebGL atlas keeps glyphs drawn before their font face loaded (e.g. bold
+  // in a fallback font). Re-rasterize once fonts arrive.
+  useEffect(
+    () =>
+      onFontsLoaded(() => {
+        for (const [, inst] of poolEntries()) {
+          if (inst.disposed) continue;
+          inst.terminal.clearTextureAtlas();
+          inst.fitAddon.fit();
+        }
+      }),
+    []
+  );
+
   const getOrCreateTerminal = useCallback(
     (sessionId: number, readOnly = false): TerminalInstance => {
       const existing = getTerminal(sessionId);
       if (existing && !existing.disposed) return existing;
 
       const settings = useSettingsStore.getState();
+      preloadTerminalFonts(settings.terminalFontFamily, settings.terminalFontSize);
       const terminal = new Terminal({
         theme: getTerminalTheme(),
         fontFamily: settings.terminalFontFamily,
