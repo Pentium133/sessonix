@@ -33,6 +33,9 @@ try:
         'SessionEnd': 'exited',
     }
     status = status_map.get(event, '')
+    # Auto-compaction mid-turn re-fires SessionStart; the turn goes on.
+    if event == 'SessionStart' and data.get('source') == 'compact':
+        status = 'running'
     if event == 'Notification':
         status = {
             'permission_prompt': 'waiting_permission',
@@ -43,17 +46,31 @@ try:
         }.get(data.get('notification_type', ''), '')
     if not status:
         sys.exit(0)
+    path = os.path.expanduser(f'~/.sessonix/hooks/{pty_id}.json')
+    now_ms = int(time.time() * 1000)
+    # Hooks run async, so a tool event's handler can finish after the Stop or
+    # PermissionRequest that followed it. Don't let such a late heartbeat
+    # overwrite a fresh turn end / permission wait.
+    if event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart'):
+        try:
+            with open(path) as f:
+                prev = json.load(f)
+            if (prev.get('event') in ('Stop', 'PermissionRequest')
+                    and now_ms - int(prev.get('ts_ms', 0)) < 2000):
+                sys.exit(0)
+        except (OSError, ValueError):
+            pass
     out = {
         'event': event,
         'status': status,
         'session_id': session_id,
         'pty_id': int(pty_id),
-        'ts': int(time.time()),
+        'ts': now_ms // 1000,
+        'ts_ms': now_ms,
     }
     if event == 'StopFailure':
         out['error'] = data.get('error', '')
-    path = os.path.expanduser(f'~/.sessonix/hooks/{pty_id}.json')
-    tmp = path + '.tmp'
+    tmp = f'{path}.{os.getpid()}.tmp'
     with open(tmp, 'w') as f:
         json.dump(out, f)
     os.rename(tmp, path)

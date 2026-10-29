@@ -96,24 +96,25 @@ pub fn install_hooks() -> Result<bool, String> {
     let settings_path = claude_settings_path()
         .ok_or_else(|| "Cannot find Claude config directory".to_string())?;
 
-    let mut settings: serde_json::Value = if settings_path.exists() {
+    let (mut settings, read_at): (serde_json::Value, _) = if settings_path.exists() {
+        let read_at = fs::metadata(&settings_path).and_then(|m| m.modified()).ok();
         let content = fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings.json: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings.json: {}", e))?
+        let value = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse settings.json: {}", e))?;
+        (value, read_at)
     } else {
-        serde_json::json!({})
+        (serde_json::json!({}), None)
     };
     if !settings.is_object() {
         return Err("settings.json is not an object".to_string());
     }
 
-    let changed = merge_hooks(&mut settings);
+    let changed = merge_hooks(&mut settings)?;
     if changed {
         let output = serde_json::to_string_pretty(&settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        fs::write(&settings_path, output)
-            .map_err(|e| format!("Failed to write settings.json: {}", e))?;
+        write_settings(&settings_path, &output, read_at)?;
     }
 
     install_handler_script()?;
@@ -164,6 +165,32 @@ fn handler_script_current() -> bool {
         .is_ok_and(|on_disk| on_disk == HANDLER_SCRIPT)
 }
 
+/// Replace settings.json atomically (temp file + rename in the target's
+/// directory, following a symlink to its target). If `read_at` is given and
+/// the file was modified after it — e.g. Claude Code wrote it meanwhile —
+/// nothing is written and an error is returned, so no change is lost.
+#[cfg(unix)]
+fn write_settings(
+    path: &std::path::Path,
+    content: &str,
+    read_at: Option<std::time::SystemTime>,
+) -> Result<(), String> {
+    let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let tmp = target.with_extension(format!("json.sessonix-{}.tmp", std::process::id()));
+    fs::write(&tmp, content).map_err(|e| format!("Failed to write settings.json: {}", e))?;
+    if let Some(read_at) = read_at {
+        let now = fs::metadata(&target).and_then(|m| m.modified()).ok();
+        if now != Some(read_at) {
+            let _ = fs::remove_file(&tmp);
+            return Err("settings.json changed while updating hooks; try again".to_string());
+        }
+    }
+    fs::rename(&tmp, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("Failed to write settings.json: {}", e)
+    })
+}
+
 /// A hook-config entry (`{"matcher"?, "hooks": [...]}`) that runs our command.
 #[cfg(unix)]
 fn entry_is_ours(entry: &serde_json::Value) -> bool {
@@ -179,11 +206,26 @@ fn entry_is_ours(entry: &serde_json::Value) -> bool {
 
 /// Add a Sessonix entry for every event in [`HOOK_EVENTS`] that lacks one and
 /// drop the matcher older versions set on the Notification entry. Returns
-/// whether `settings` changed.
+/// whether `settings` changed. Refuses (leaving `settings` untouched) when
+/// `hooks` or an event's value has an unexpected shape rather than replace
+/// the user's data.
 #[cfg(unix)]
-fn merge_hooks(settings: &mut serde_json::Value) -> bool {
+fn merge_hooks(settings: &mut serde_json::Value) -> Result<bool, String> {
+    match settings.get("hooks") {
+        None => {}
+        Some(h) if h.is_object() => {}
+        Some(_) => return Err("settings.json: \"hooks\" is not an object".to_string()),
+    }
+    if let Some(hooks) = settings.get("hooks").and_then(|h| h.as_object()) {
+        for (event, _) in HOOK_EVENTS {
+            if hooks.get(*event).is_some_and(|v| !v.is_array()) {
+                return Err(format!("settings.json: hooks.{} is not an array", event));
+            }
+        }
+    }
+
     let mut changed = false;
-    if !settings.get("hooks").is_some_and(|h| h.is_object()) {
+    if settings.get("hooks").is_none() {
         settings["hooks"] = serde_json::json!({});
         changed = true;
     }
@@ -192,11 +234,9 @@ fn merge_hooks(settings: &mut serde_json::Value) -> bool {
     for &(event, is_async) in HOOK_EVENTS {
         let entries = hooks
             .entry(event)
-            .or_insert_with(|| serde_json::json!([]));
-        if !entries.is_array() {
-            *entries = serde_json::json!([]);
-        }
-        let entries = entries.as_array_mut().expect("array");
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("validated above");
 
         let mut found = false;
         for entry in entries.iter_mut().filter(|e| entry_is_ours(e)) {
@@ -214,7 +254,7 @@ fn merge_hooks(settings: &mut serde_json::Value) -> bool {
             changed = true;
         }
     }
-    changed
+    Ok(changed)
 }
 
 /// Every event in [`HOOK_EVENTS`] has a Sessonix entry, none with a matcher.
@@ -438,7 +478,7 @@ mod tests {
     #[test]
     fn merge_into_empty_adds_all_events() {
         let mut settings = serde_json::json!({});
-        assert!(merge_hooks(&mut settings));
+        assert!(merge_hooks(&mut settings).unwrap());
         for (event, _) in HOOK_EVENTS {
             assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
         }
@@ -449,7 +489,7 @@ mod tests {
     fn upgrade_old_install() {
         let mut settings = old_install();
         assert!(!hooks_complete(&settings));
-        assert!(merge_hooks(&mut settings));
+        assert!(merge_hooks(&mut settings).unwrap());
         for (event, _) in HOOK_EVENTS {
             assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
         }
@@ -465,18 +505,160 @@ mod tests {
     #[test]
     fn merge_is_idempotent() {
         let mut settings = old_install();
-        merge_hooks(&mut settings);
+        merge_hooks(&mut settings).unwrap();
         let snapshot = settings.clone();
-        assert!(!merge_hooks(&mut settings));
+        assert!(!merge_hooks(&mut settings).unwrap());
         assert_eq!(settings, snapshot);
     }
 
     #[test]
     fn hooks_complete_false_when_event_missing() {
         let mut settings = serde_json::json!({});
-        merge_hooks(&mut settings);
+        merge_hooks(&mut settings).unwrap();
         settings["hooks"].as_object_mut().unwrap().remove("StopFailure");
         assert!(!hooks_complete(&settings));
+    }
+
+    /// Run the handler with a pre-existing status file in a fresh HOME.
+    fn run_handler_over(existing: serde_json::Value, input: serde_json::Value) -> serde_json::Value {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".sessonix/hooks");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("42.json"), existing.to_string()).unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let mut child = Command::new("bash")
+            .arg(script)
+            .env("HOME", home.path())
+            .env("SESSONIX_PTY_ID", "42")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+        serde_json::from_str(&fs::read_to_string(dir.join("42.json")).unwrap()).unwrap()
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    #[test]
+    fn handler_session_start_after_compact_is_running() {
+        let s = handler_status(serde_json::json!({
+            "hook_event_name": "SessionStart", "session_id": "s", "source": "compact"
+        }));
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn handler_late_tool_event_does_not_override_fresh_stop() {
+        let existing = serde_json::json!({
+            "event": "Stop", "status": "idle", "session_id": "s", "pty_id": 42,
+            "ts": now_ms() / 1000, "ts_ms": now_ms()
+        });
+        let out = run_handler_over(existing, serde_json::json!({"hook_event_name": "PostToolUse", "session_id": "s"}));
+        assert_eq!(out["status"], "idle");
+    }
+
+    #[test]
+    fn handler_late_pre_tool_does_not_override_fresh_permission() {
+        let existing = serde_json::json!({
+            "event": "PermissionRequest", "status": "waiting_permission", "session_id": "s",
+            "pty_id": 42, "ts": now_ms() / 1000, "ts_ms": now_ms()
+        });
+        let out = run_handler_over(existing, serde_json::json!({"hook_event_name": "PreToolUse", "session_id": "s"}));
+        assert_eq!(out["status"], "waiting_permission");
+    }
+
+    #[test]
+    fn handler_tool_event_overrides_old_stop() {
+        let old = now_ms() - 10_000;
+        let existing = serde_json::json!({
+            "event": "Stop", "status": "idle", "session_id": "s", "pty_id": 42,
+            "ts": old / 1000, "ts_ms": old
+        });
+        let out = run_handler_over(existing, serde_json::json!({"hook_event_name": "PreToolUse", "session_id": "s"}));
+        assert_eq!(out["status"], "running");
+    }
+
+    #[test]
+    fn handler_parallel_writes_leave_valid_json() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let children: Vec<_> = (0..24)
+            .map(|i| {
+                let event = if i % 2 == 0 { "PostToolUse" } else { "PostToolUseFailure" };
+                let mut c = Command::new("bash")
+                    .arg(script)
+                    .env("HOME", home.path())
+                    .env("SESSONIX_PTY_ID", "42")
+                    .stdin(Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                let input = serde_json::json!({"hook_event_name": event, "session_id": "s".repeat(i + 1)});
+                c.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+                c
+            })
+            .collect();
+        for mut c in children {
+            c.wait().unwrap();
+        }
+        let content = fs::read_to_string(home.path().join(".sessonix/hooks/42.json")).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&content).is_ok(), "{content}");
+    }
+
+    #[test]
+    fn merge_preserves_key_order() {
+        let mut settings: serde_json::Value =
+            serde_json::from_str(r#"{"zeta": 1, "alpha": 2, "hooks": {"Stop": []}}"#).unwrap();
+        merge_hooks(&mut settings).unwrap();
+        let out = serde_json::to_string(&settings).unwrap();
+        assert!(out.find("zeta").unwrap() < out.find("alpha").unwrap(), "{out}");
+    }
+
+    #[test]
+    fn merge_rejects_non_object_hooks() {
+        let mut settings = serde_json::json!({"hooks": ["user", "data"]});
+        assert!(merge_hooks(&mut settings).is_err());
+        assert_eq!(settings, serde_json::json!({"hooks": ["user", "data"]}));
+    }
+
+    #[test]
+    fn merge_rejects_non_array_event() {
+        let mut settings = serde_json::json!({"hooks": {"Stop": {"weird": true}}});
+        assert!(merge_hooks(&mut settings).is_err());
+        assert_eq!(settings["hooks"]["Stop"], serde_json::json!({"weird": true}));
+    }
+
+    #[test]
+    fn write_atomic_keeps_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.json");
+        let link = dir.path().join("settings.json");
+        fs::write(&target, "{}").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_settings(&link, "{\"a\":1}", None).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "{\"a\":1}");
+    }
+
+    #[test]
+    fn write_refuses_when_file_changed_since_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        let read_at = fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "{\"changed\":true}").unwrap();
+        assert!(write_settings(&path, "{}", Some(read_at)).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"changed\":true}");
     }
 
     #[test]
