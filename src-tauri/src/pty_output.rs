@@ -1,9 +1,17 @@
 //! Binary PTY output transport: frames sent to the frontend over a Tauri
 //! IPC channel. Frame = 4-byte little-endian session id + raw output bytes.
 
-use parking_lot::Mutex;
+use crate::ring_buffer::RingBuffer;
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, InvokeResponseBody};
+
+/// A batch is sent once it reaches this size...
+pub const MAX_BATCH_BYTES: usize = 64 * 1024;
+/// ...or this long after its first byte arrived, whichever comes first.
+pub const MAX_BATCH_DELAY: Duration = Duration::from_millis(4);
 
 /// `[id as u32 LE][data...]`
 pub fn encode_frame(id: u32, data: &[u8]) -> Vec<u8> {
@@ -47,6 +55,139 @@ impl OutputHub {
     }
 }
 
+struct BatchState {
+    attached: bool,
+    ring: RingBuffer,
+    pending: Vec<u8>,
+    /// When the first byte of the current (non-empty) batch arrived.
+    first_at: Option<Instant>,
+    closed: bool,
+}
+
+/// Per-session output coalescing. Owns the session's attach flag and ring
+/// buffer so that record / detach / attach are atomic under one lock: a byte
+/// is either sent to the frontend or left in the ring buffer for replay,
+/// never discarded by a concurrent detach.
+pub struct OutputBatcher {
+    id: u32,
+    hub: Arc<OutputHub>,
+    state: Mutex<BatchState>,
+    wake: Condvar,
+}
+
+impl OutputBatcher {
+    /// Starts attached and spawns the flusher thread, which runs until
+    /// [`close`](Self::close).
+    pub fn new(id: u32, ring_capacity: usize, hub: Arc<OutputHub>) -> Arc<Self> {
+        let batcher = Arc::new(Self {
+            id,
+            hub,
+            state: Mutex::new(BatchState {
+                attached: true,
+                ring: RingBuffer::new(ring_capacity),
+                pending: Vec::new(),
+                first_at: None,
+                closed: false,
+            }),
+            wake: Condvar::new(),
+        });
+        let flusher = batcher.clone();
+        thread::spawn(move || flusher.run_flusher());
+        batcher
+    }
+
+    /// Record PTY output: always into the ring buffer, and into the pending
+    /// batch for live delivery. Ignored after `close`.
+    pub fn record(&self, data: &[u8]) {
+        let mut st = self.state.lock();
+        if st.closed {
+            return;
+        }
+        st.ring.write(data);
+        st.pending.extend_from_slice(data);
+        if st.first_at.is_none() {
+            st.first_at = Some(Instant::now());
+            self.wake.notify_one();
+        }
+        if st.pending.len() >= MAX_BATCH_BYTES {
+            self.flush_locked(&mut st);
+        }
+    }
+
+    /// Send what is pending, then stop live delivery and discard the ring
+    /// buffer (its contents have all been sent).
+    pub fn detach(&self) {
+        let mut st = self.state.lock();
+        self.flush_locked(&mut st);
+        st.attached = false;
+        st.ring.drain();
+    }
+
+    /// Resume live delivery. If the session was detached, return the bytes
+    /// recorded since then for replay; empty if it was already attached.
+    pub fn attach_and_drain(&self) -> Vec<u8> {
+        let mut st = self.state.lock();
+        let buffered = if st.attached {
+            Vec::new()
+        } else {
+            st.ring.drain()
+        };
+        st.attached = true;
+        buffered
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.state.lock().attached
+    }
+
+    /// Stop the flusher. With `flush`, pending output is sent first (PTY
+    /// EOF, so the last output precedes `pty-exit`); without it, dropped (kill).
+    pub fn close(&self, flush: bool) {
+        let mut st = self.state.lock();
+        if flush {
+            self.flush_locked(&mut st);
+        } else {
+            st.pending.clear();
+            st.first_at = None;
+        }
+        st.closed = true;
+        self.wake.notify_one();
+    }
+
+    /// Sends under the lock so frames keep byte order and a concurrent
+    /// detach cannot slip between "taken" and "sent".
+    fn flush_locked(&self, st: &mut MutexGuard<'_, BatchState>) {
+        st.first_at = None;
+        if st.pending.is_empty() {
+            return;
+        }
+        let data = std::mem::take(&mut st.pending);
+        if st.attached {
+            self.hub.send(encode_frame(self.id, &data));
+        }
+    }
+
+    fn run_flusher(&self) {
+        let mut st = self.state.lock();
+        loop {
+            if st.closed {
+                return;
+            }
+            match st.first_at {
+                None => self.wake.wait(&mut st),
+                Some(first) => {
+                    let deadline = first + MAX_BATCH_DELAY;
+                    if Instant::now() >= deadline {
+                        self.flush_locked(&mut st);
+                    } else {
+                        self.wake.wait_until(&mut st, deadline);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +223,112 @@ mod tests {
         hub.send(vec![9]);
         assert!(a.0.lock().is_empty());
         assert_eq!(*b.0.lock(), vec![vec![9]]);
+    }
+
+    fn batcher_with_sink() -> (Arc<OutputBatcher>, Arc<RecordingSink>) {
+        let hub = Arc::new(OutputHub::default());
+        let sink = Arc::new(RecordingSink::default());
+        hub.subscribe(sink.clone());
+        (OutputBatcher::new(7, 1024 * 1024, hub), sink)
+    }
+
+    fn payloads(sink: &RecordingSink) -> Vec<Vec<u8>> {
+        sink.0
+            .lock()
+            .iter()
+            .map(|f| {
+                assert_eq!(&f[..4], &7u32.to_le_bytes());
+                f[4..].to_vec()
+            })
+            .collect()
+    }
+
+    fn settle() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn small_writes_coalesce() {
+        let (b, sink) = batcher_with_sink();
+        b.record(b"a");
+        b.record(b"b");
+        settle();
+        assert_eq!(payloads(&sink), vec![b"ab".to_vec()]);
+    }
+
+    #[test]
+    fn large_burst_splits_in_order() {
+        let (b, sink) = batcher_with_sink();
+        let mut input = Vec::new();
+        for i in 0..3u8 {
+            let chunk = vec![i; 40 * 1024];
+            b.record(&chunk);
+            input.extend_from_slice(&chunk);
+        }
+        settle();
+        let frames = payloads(&sink);
+        assert!(frames.len() >= 2);
+        assert!(frames.iter().all(|f| f.len() <= 128 * 1024));
+        assert_eq!(frames.concat(), input);
+    }
+
+    #[test]
+    fn detached_does_not_send() {
+        let (b, sink) = batcher_with_sink();
+        b.detach();
+        b.record(b"x");
+        settle();
+        assert!(sink.0.lock().is_empty());
+        assert_eq!(b.attach_and_drain(), b"x".to_vec());
+    }
+
+    #[test]
+    fn detach_flushes_pending() {
+        let (b, sink) = batcher_with_sink();
+        b.record(b"x");
+        b.detach();
+        assert_eq!(payloads(&sink), vec![b"x".to_vec()]);
+    }
+
+    #[test]
+    fn concurrent_record_during_detach_loses_nothing() {
+        let (b, sink) = batcher_with_sink();
+        let writer = {
+            let b = b.clone();
+            std::thread::spawn(move || {
+                for i in 0..1000u32 {
+                    b.record(&[(i % 251) as u8]);
+                    if i % 100 == 0 {
+                        std::thread::yield_now();
+                    }
+                }
+            })
+        };
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        b.detach();
+        writer.join().unwrap();
+        settle();
+        let mut got = payloads(&sink).concat();
+        got.extend(b.attach_and_drain());
+        let expected: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn close_with_flush_sends_pending() {
+        let (b, sink) = batcher_with_sink();
+        b.record(b"z");
+        b.close(true);
+        assert_eq!(payloads(&sink), vec![b"z".to_vec()]);
+    }
+
+    #[test]
+    fn close_without_flush_drops_pending() {
+        let (b, sink) = batcher_with_sink();
+        b.record(b"z");
+        b.close(false);
+        b.record(b"after");
+        settle();
+        assert!(sink.0.lock().is_empty());
     }
 }
