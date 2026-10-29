@@ -101,6 +101,25 @@ fn get_session_count(state: tauri::State<'_, SessionManager>) -> Result<usize, S
     Ok(state.pty.session_count())
 }
 
+/// Status shown for a hook status file (any agent using hook-handler.sh).
+fn hook_agent_status(hook: &hooks::HookStatus) -> types::AgentStatus {
+    let (state, status_line) = match hook.status.as_str() {
+        "running" => (types::SessionStatus::Running, "Working...".to_string()),
+        "idle" => (types::SessionStatus::Idle, "Waiting for input".to_string()),
+        "waiting_permission" => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
+        "error" => (
+            types::SessionStatus::Error,
+            match hook.error.as_deref() {
+                Some(e) if !e.is_empty() => format!("API error: {}", e),
+                _ => "API error".to_string(),
+            },
+        ),
+        "exited" => (types::SessionStatus::Running, "Session ending...".to_string()),
+        _ => (types::SessionStatus::Running, String::new()),
+    };
+    types::AgentStatus { state, status_line }
+}
+
 #[tauri::command]
 fn get_session_status(
     state: tauri::State<'_, SessionManager>,
@@ -116,14 +135,23 @@ fn get_session_status(
     if agent_type.as_deref() == Some("claude") {
         // 1. Check hook status file (fastest, real-time from Claude events)
         if let Some(hook) = hooks::read_hook_status(id) {
-            let (state_val, status_line) = match hook.status.as_str() {
-                "running" => (types::SessionStatus::Running, "Working...".to_string()),
-                "idle" => (types::SessionStatus::Idle, "Waiting for input".to_string()),
-                "waiting_permission" => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
-                "exited" => (types::SessionStatus::Running, "Session ending...".to_string()),
-                _ => (types::SessionStatus::Running, String::new()),
+            // Esc fires no hook event: a "running" hook whose transcript ends
+            // with the interrupt entry is really waiting for input.
+            let interrupted = || {
+                hook.status == "running"
+                    && working_dir
+                        .as_ref()
+                        .zip(agent_session_id.as_ref())
+                        .and_then(|(wd, sid)| jsonl::find_session_file_by_id(wd, sid))
+                        .is_some_and(|p| jsonl::ends_with_interrupt(&p))
             };
-            return Ok(types::AgentStatus { state: state_val, status_line });
+            if interrupted() {
+                return Ok(types::AgentStatus {
+                    state: types::SessionStatus::Idle,
+                    status_line: "Waiting for input".to_string(),
+                });
+            }
+            return Ok(hook_agent_status(&hook));
         }
 
         // 2. Check JSONL tail — only when we have a session UUID.
@@ -138,7 +166,6 @@ fn get_session_status(
                 let (state_val, status_line) = match status {
                     jsonl::ClaudeStatus::Active => (types::SessionStatus::Running, "Working...".to_string()),
                     jsonl::ClaudeStatus::Idle => (types::SessionStatus::Idle, "Waiting for input".to_string()),
-                    jsonl::ClaudeStatus::WaitingPermission => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
                     jsonl::ClaudeStatus::Error(msg) => (types::SessionStatus::Error, msg),
                     jsonl::ClaudeStatus::Unknown => {
                         // Fall back to terminal-based detection
@@ -153,6 +180,15 @@ fn get_session_status(
                 };
                 return Ok(types::AgentStatus { state: state_val, status_line });
             }
+        }
+    }
+
+    // Codex, Gemini, Cursor (hook handler) and OpenCode (status plugin): hook
+    // status file when installed (and, for Codex, trusted); otherwise terminal
+    // patterns below.
+    if matches!(agent_type.as_deref(), Some("codex" | "gemini" | "cursor" | "opencode")) {
+        if let Some(hook) = hooks::read_hook_status(id) {
+            return Ok(hook_agent_status(&hook));
         }
     }
 
@@ -1266,6 +1302,27 @@ pub fn run() {
         .manage(SessionManager::new(db))
         .manage(AdapterRegistry::new())
         .setup(move |app| {
+            // Bring hooks installed by an older Sessonix up to date (new events,
+            // new handler script). Never installs from scratch.
+            match hooks::upgrade_if_installed() {
+                Ok(true) => log::info!("Upgraded Claude Code hooks"),
+                Ok(false) => {}
+                Err(e) => log::warn!("Failed to upgrade Claude Code hooks: {}", e),
+            }
+            let upgrades: [(&str, hooks::HookInstaller); 4] = [
+                ("Codex", hooks::upgrade_codex_if_installed),
+                ("Gemini", hooks::upgrade_gemini_if_installed),
+                ("Cursor", hooks::upgrade_cursor_if_installed),
+                ("OpenCode", hooks::upgrade_opencode_if_installed),
+            ];
+            for (agent, upgrade) in upgrades {
+                match upgrade() {
+                    Ok(true) => log::info!("Upgraded {} status hooks", agent),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("Failed to upgrade {} status hooks: {}", agent, e),
+                }
+            }
+
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
             use tauri::menu::*;
 
@@ -1404,4 +1461,31 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod hook_status_tests {
+    use super::*;
+
+    fn hook(status: &str, error: Option<&str>) -> hooks::HookStatus {
+        serde_json::from_value(serde_json::json!({
+            "event": "x", "status": status, "session_id": "s", "pty_id": 1, "ts": 0,
+            "error": error,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn hook_agent_status_maps_error() {
+        let s = hook_agent_status(&hook("error", Some("rate_limit")));
+        assert_eq!(s.state, types::SessionStatus::Error);
+        assert_eq!(s.status_line, "API error: rate_limit");
+    }
+
+    #[test]
+    fn hook_agent_status_maps_permission() {
+        let s = hook_agent_status(&hook("waiting_permission", None));
+        assert_eq!(s.state, types::SessionStatus::Idle);
+        assert_eq!(s.status_line, "Waiting for permission");
+    }
 }

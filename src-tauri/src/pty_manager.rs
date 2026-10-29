@@ -124,6 +124,8 @@ impl PtyManager {
         }
     }
 
+    // Plain spawn parameters; a params struct would only be built at one call site.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_session(
         &self,
         command: &str,
@@ -131,6 +133,7 @@ impl PtyManager {
         working_dir: &str,
         cols: u16,
         rows: u16,
+        agent_type: &str,
         app_handle: AppHandle,
     ) -> Result<u32, AppError> {
         let pty_system = native_pty_system();
@@ -201,6 +204,8 @@ impl PtyManager {
         // Allocate ID atomically before spawning, so SESSONIX_PTY_ID matches the session ID
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         cmd.env("SESSONIX_PTY_ID", id.to_string());
+        // Lets the hook handler drop events from other agents run inside this PTY.
+        cmd.env("SESSONIX_AGENT", agent_type);
 
         let child = pair
             .slave
