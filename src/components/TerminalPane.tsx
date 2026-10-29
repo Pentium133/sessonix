@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { writeToSession, resizeSession, saveScrollback, getScrollback } from "../lib/api";
 import { useSettingsStore } from "../store/settingsStore";
 import { getThemeById, resolveSystemTheme } from "../lib/themes";
+import { loadUnicodeWidths, loadWebglRenderer } from "../lib/terminalRenderer";
 import {
   MAX_LIVE_TERMINALS,
   type TerminalInstance,
@@ -102,6 +103,7 @@ export default function TerminalPane({
       const serializeAddon = new SerializeAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(serializeAddon);
+      loadUnicodeWidths(terminal);
 
       if (!readOnly) {
         terminal.onData((data) => {
@@ -157,6 +159,7 @@ export default function TerminalPane({
       wrapper.style.left = "0";
       container.appendChild(wrapper);
       terminal.open(wrapper);
+      loadWebglRenderer(terminal);
     }
 
     for (const child of Array.from(container.children) as HTMLDivElement[]) {
