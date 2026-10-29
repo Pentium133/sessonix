@@ -136,10 +136,6 @@ impl OutputBatcher {
         buffered
     }
 
-    pub fn is_attached(&self) -> bool {
-        self.state.lock().attached
-    }
-
     /// Stop the flusher. With `flush`, pending output is sent first (PTY
     /// EOF, so the last output precedes `pty-exit`); without it, dropped (kill).
     pub fn close(&self, flush: bool) {
