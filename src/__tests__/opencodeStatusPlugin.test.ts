@@ -1,4 +1,5 @@
 // @vitest-environment node
+// @ts-nocheck -- exercises a Node plugin (node:fs, process); the project ships no @types/node.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

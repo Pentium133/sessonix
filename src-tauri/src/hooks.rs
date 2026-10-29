@@ -98,6 +98,10 @@ const CODEX_HOOK_EVENTS: &[(&str, bool)] = &[
     ("SessionEnd", false),
 ];
 
+/// Installs or upgrades one agent's status hooks; `Ok(true)` when it changed
+/// something.
+pub type HookInstaller = fn() -> Result<bool, String>;
+
 /// Gemini CLI events Sessonix listens to. Gemini runs hooks synchronously
 /// (no async option documented).
 #[cfg(unix)]
