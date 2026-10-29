@@ -5,6 +5,7 @@ mod error;
 mod git_manager;
 mod hooks;
 mod jsonl;
+mod notifications;
 mod pty_manager;
 mod pty_output;
 mod ring_buffer;
@@ -435,6 +436,16 @@ fn get_agent_session_id(
     pty_id: u32,
 ) -> Result<Option<String>, String> {
     state.db.get_agent_session_id(pty_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn send_session_notification(
+    app: tauri::AppHandle,
+    title: String,
+    body: String,
+    session_id: u32,
+) -> Result<(), String> {
+    notifications::send(&app, title, body, session_id)
 }
 
 #[tauri::command]
@@ -1302,6 +1313,8 @@ pub fn run() {
         .manage(SessionManager::new(db))
         .manage(AdapterRegistry::new())
         .setup(move |app| {
+            notifications::install(app.handle());
+
             // Bring hooks installed by an older Sessonix up to date (new events,
             // new handler script). Never installs from scratch.
             match hooks::upgrade_if_installed() {
@@ -1421,6 +1434,7 @@ pub fn run() {
             get_scrollback,
             delete_session,
             notify_session_exit,
+            send_session_notification,
             reorder_session,
             reorder_project,
             set_sort_order,
