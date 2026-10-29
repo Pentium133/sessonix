@@ -258,6 +258,7 @@ impl SessionManager {
             pty_cwd,
             params.cols,
             params.rows,
+            params.agent_type,
             params.app_handle,
         )?;
 

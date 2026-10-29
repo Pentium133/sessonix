@@ -3,10 +3,17 @@
 # Writes per-session status files to ~/.sessonix/hooks/<pty_id>.json
 # Set SESSONIX_PTY_ID env var when spawning Claude to enable.
 # Event semantics: https://code.claude.com/docs/en/hooks
+# $1 = agent the hook was installed for (claude, codex). Events from an agent
+# other than the one Sessonix spawned in this PTY (e.g. `codex exec` run as a
+# tool inside a Claude session) are ignored.
 PTY_ID="${SESSONIX_PTY_ID}"
 [ -z "$PTY_ID" ] && exit 0
+HOOK_AGENT="$1"
+if [ -n "$HOOK_AGENT" ] && [ -n "$SESSONIX_AGENT" ] && [ "$HOOK_AGENT" != "$SESSONIX_AGENT" ]; then
+    exit 0
+fi
 mkdir -p ~/.sessonix/hooks 2>/dev/null
-python3 -c "
+SESSONIX_HOOK_AGENT="$HOOK_AGENT" python3 -c "
 import sys, json, time, os
 try:
     data = json.load(sys.stdin)
@@ -55,13 +62,15 @@ try:
     # PermissionRequest that followed it. Don't let such a late heartbeat
     # overwrite a fresh turn end / permission wait.
     # Codex also fires SessionStart for subagents mid-turn: never let it end a
-    # running turn.
+    # running turn. (Claude's SessionStart does reset a stale running state.)
     try:
         with open(path) as f:
             prev = json.load(f)
     except (OSError, ValueError):
         prev = {}
-    if event == 'SessionStart' and status == 'idle' and prev.get('status') == 'running':
+    agent = os.environ.get('SESSONIX_HOOK_AGENT', '')
+    if (agent == 'codex' and event == 'SessionStart' and status == 'idle'
+            and prev.get('status') == 'running'):
         sys.exit(0)
     if (event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart')
             and prev.get('event') in ('Stop', 'Interrupt', 'PermissionRequest')
