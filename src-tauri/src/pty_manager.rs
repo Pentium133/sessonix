@@ -54,11 +54,13 @@ impl PtySession {
     }
 
     pub fn kill(&self) -> Result<(), AppError> {
-        self.batcher.close(false);
         let mut child = self.child.lock();
         child
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
+        // Only once the kill succeeded: a session that survives a failed kill
+        // must keep delivering output.
+        self.batcher.close(false);
         Ok(())
     }
 
@@ -67,19 +69,16 @@ impl PtySession {
     /// Pending output is sent first; the ring buffer only matters to a UI
     /// that's about to reattach, so the already-streamed data is dropped. The
     /// reader thread keeps writing into the (now-empty) buffer until the next
-    /// attach returns it via `attach_and_drain`.
+    /// `attach` replays it. No-op when already detached.
     pub fn detach(&self) {
         self.batcher.detach();
     }
 
-    /// Mark the session as attached. If it was detached, return the bytes
-    /// buffered since detach so the caller can replay them into its terminal.
-    ///
-    /// Idempotent: attaching an already-attached session returns an empty
-    /// vector without touching the ring buffer (data has already been
-    /// streamed over the output channel).
-    pub fn attach_and_drain(&self) -> Vec<u8> {
-        self.batcher.attach_and_drain()
+    /// Mark the session as attached. If it was detached, the output buffered
+    /// since then is replayed on the output channel ahead of live output.
+    /// Idempotent: attaching an already-attached session sends nothing.
+    pub fn attach(&self) {
+        self.batcher.attach();
     }
 
     /// Clone the ring of the most recent terminal lines (used by status

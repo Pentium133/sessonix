@@ -80,12 +80,10 @@ fn detach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<()
 }
 
 #[tauri::command]
-fn attach_session(
-    state: tauri::State<'_, SessionManager>,
-    id: u32,
-) -> Result<tauri::ipc::Response, String> {
+fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), String> {
     let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
-    Ok(tauri::ipc::Response::new(session.attach_and_drain()))
+    session.attach();
+    Ok(())
 }
 
 /// Live PTY output for all sessions arrives on `on_output` as binary frames

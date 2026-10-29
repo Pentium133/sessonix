@@ -120,25 +120,31 @@ impl OutputBatcher {
     }
 
     /// Send what is pending, then stop live delivery and discard the ring
-    /// buffer (its contents have all been sent).
+    /// buffer (its contents have all been sent). No-op when already detached:
+    /// the ring then holds unsent output that the next attach must replay.
     pub fn detach(&self) {
         let mut st = self.state.lock();
+        if !st.attached {
+            return;
+        }
         self.flush_locked(&mut st);
         st.attached = false;
         st.ring.drain();
     }
 
-    /// Resume live delivery. If the session was detached, return the bytes
-    /// recorded since then for replay; empty if it was already attached.
-    pub fn attach_and_drain(&self) -> Vec<u8> {
+    /// Resume live delivery. If the session was detached, the bytes recorded
+    /// since then go out as one frame first — under the lock, so no output
+    /// recorded after this call can overtake the replay.
+    pub fn attach(&self) {
         let mut st = self.state.lock();
-        let buffered = if st.attached {
-            Vec::new()
-        } else {
-            st.ring.drain()
-        };
+        if st.attached {
+            return;
+        }
         st.attached = true;
-        buffered
+        let replay = st.ring.drain();
+        if !replay.is_empty() {
+            self.hub.send(encode_frame(self.id, &replay));
+        }
     }
 
     /// Stop the flusher. With `flush`, pending output is sent first (PTY
@@ -168,6 +174,7 @@ impl OutputBatcher {
         }
     }
 
+    // Sole waiter on `wake`, which is why every notifier uses `notify_one`.
     fn run_flusher(&self) {
         let mut st = self.state.lock();
         loop {
@@ -280,7 +287,44 @@ mod tests {
         b.record(b"x");
         settle();
         assert!(sink.0.lock().is_empty());
-        assert_eq!(b.attach_and_drain(), b"x".to_vec());
+    }
+
+    #[test]
+    fn attach_replays_detached_output_as_frame() {
+        let (b, sink) = batcher_with_sink();
+        b.detach();
+        b.record(b"x");
+        b.attach();
+        assert_eq!(payloads(&sink), vec![b"x".to_vec()]);
+    }
+
+    #[test]
+    fn attach_replay_precedes_later_output() {
+        let (b, sink) = batcher_with_sink();
+        b.detach();
+        b.record(b"old");
+        b.attach();
+        b.record(b"new");
+        settle();
+        assert_eq!(payloads(&sink), vec![b"old".to_vec(), b"new".to_vec()]);
+    }
+
+    #[test]
+    fn attach_when_attached_sends_nothing() {
+        let (b, sink) = batcher_with_sink();
+        b.attach();
+        settle();
+        assert!(sink.0.lock().is_empty());
+    }
+
+    #[test]
+    fn second_detach_keeps_detached_output() {
+        let (b, sink) = batcher_with_sink();
+        b.detach();
+        b.record(b"x");
+        b.detach();
+        b.attach();
+        assert_eq!(payloads(&sink), vec![b"x".to_vec()]);
     }
 
     #[test]
@@ -288,9 +332,9 @@ mod tests {
         let (b, sink) = batcher_with_sink();
         b.detach();
         b.record(b"xyz");
-        assert_eq!(b.attach_and_drain(), b"xyz".to_vec());
+        b.attach();
         settle();
-        assert!(sink.0.lock().is_empty());
+        assert_eq!(payloads(&sink), vec![b"xyz".to_vec()]);
     }
 
     #[test]
@@ -319,8 +363,8 @@ mod tests {
         b.detach();
         writer.join().unwrap();
         settle();
-        let mut got = payloads(&sink).concat();
-        got.extend(b.attach_and_drain());
+        b.attach();
+        let got = payloads(&sink).concat();
         let expected: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
         assert_eq!(got, expected);
     }
