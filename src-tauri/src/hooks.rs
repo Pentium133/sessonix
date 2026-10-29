@@ -9,6 +9,8 @@ use std::path::PathBuf;
 const HOOK_COMMAND: &str = "bash ~/.sessonix/hook-handler.sh";
 #[cfg(unix)]
 const HANDLER_SCRIPT: &str = include_str!("../resources/hook-handler.sh");
+#[cfg(unix)]
+const OPENCODE_PLUGIN: &str = include_str!("../resources/opencode-status-plugin.js");
 
 /// Hook status file written by hook-handler.sh. Fields are deserialized from
 /// JSON produced by an external process; some are retained for future
@@ -96,6 +98,40 @@ const CODEX_HOOK_EVENTS: &[(&str, bool)] = &[
     ("SessionEnd", false),
 ];
 
+/// Gemini CLI events Sessonix listens to. Gemini runs hooks synchronously
+/// (no async option documented).
+#[cfg(unix)]
+const GEMINI_HOOK_EVENTS: &[(&str, bool)] = &[
+    ("SessionStart", false),
+    ("BeforeAgent", false),
+    ("BeforeTool", false),
+    ("AfterTool", false),
+    ("PreCompress", false),
+    ("AfterAgent", false),
+    // Filtered by notification_type (ToolPermission) in the handler.
+    ("Notification", false),
+    ("SessionEnd", false),
+];
+
+/// Cursor events Sessonix listens to. Never add a permission hook
+/// (preToolUse, beforeShellExecution, beforeMCPExecution, beforeReadFile,
+/// subagentStart): Cursor blocks the action when such a hook's output isn't a
+/// valid permission decision, and answering "allow" would override the
+/// user's permissions.
+#[cfg(unix)]
+const CURSOR_HOOK_EVENTS: &[&str] = &[
+    "sessionStart",
+    "beforeSubmitPrompt",
+    "postToolUse",
+    "postToolUseFailure",
+    "afterShellExecution",
+    "afterMCPExecution",
+    "afterFileEdit",
+    "preCompact",
+    "stop",
+    "sessionEnd",
+];
+
 /// Install Sessonix hooks into Claude's settings.json, adding any missing
 /// events and upgrading entries written by older versions. Preserves hooks
 /// from other tools. Always rewrites the handler script.
@@ -174,6 +210,89 @@ pub fn upgrade_codex_if_installed() -> Result<bool, String> {
     upgrade_existing(codex_hooks_path(), CODEX_HOOK_EVENTS, "codex", install_codex_hooks)
 }
 
+/// Install Sessonix hooks into Gemini CLI's `~/.gemini/settings.json`.
+#[cfg(windows)]
+pub fn install_gemini_hooks() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn install_gemini_hooks() -> Result<bool, String> {
+    let path = gemini_settings_path().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let changed = install_into(&path, GEMINI_HOOK_EVENTS, "gemini")?;
+    install_handler_script()?;
+    Ok(changed)
+}
+
+#[cfg(windows)]
+pub fn upgrade_gemini_if_installed() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn upgrade_gemini_if_installed() -> Result<bool, String> {
+    upgrade_existing(gemini_settings_path(), GEMINI_HOOK_EVENTS, "gemini", install_gemini_hooks)
+}
+
+/// Install Sessonix hooks into Cursor's `~/.cursor/hooks.json` (flat entries).
+#[cfg(windows)]
+pub fn install_cursor_hooks() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn install_cursor_hooks() -> Result<bool, String> {
+    let path = cursor_hooks_path().ok_or_else(|| "Cannot find home directory".to_string())?;
+    let changed = install_json(&path, |hooks| merge_flat_hooks(hooks, CURSOR_HOOK_EVENTS, "cursor"))?;
+    install_handler_script()?;
+    Ok(changed)
+}
+
+#[cfg(windows)]
+pub fn upgrade_cursor_if_installed() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn upgrade_cursor_if_installed() -> Result<bool, String> {
+    let Some(hooks) = cursor_hooks_path().and_then(|p| read_json(&p)) else {
+        return Ok(false);
+    };
+    let installed = hooks["hooks"].as_object().is_some_and(|events| {
+        events.values().any(|e| e.as_array().is_some_and(|e| e.iter().any(is_our_command)))
+    });
+    if !installed || (flat_hooks_complete(&hooks, CURSOR_HOOK_EVENTS, "cursor") && handler_script_current()) {
+        return Ok(false);
+    }
+    install_cursor_hooks().map(|_| true)
+}
+
+/// Install the Sessonix status plugin into OpenCode's global plugin dir.
+#[cfg(windows)]
+pub fn install_opencode_plugin() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn install_opencode_plugin() -> Result<bool, String> {
+    let path = opencode_plugin_path().ok_or_else(|| "Cannot find home directory".to_string())?;
+    install_file(&path, OPENCODE_PLUGIN)
+}
+
+/// Update the plugin if a previous version is installed.
+#[cfg(windows)]
+pub fn upgrade_opencode_if_installed() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn upgrade_opencode_if_installed() -> Result<bool, String> {
+    match opencode_plugin_path() {
+        Some(path) if path.exists() => install_file(&path, OPENCODE_PLUGIN),
+        _ => Ok(false),
+    }
+}
+
 /// Re-run `install` when `path` already holds Sessonix hooks but they (or the
 /// handler script) are out of date.
 #[cfg(unix)]
@@ -196,6 +315,16 @@ fn upgrade_existing(
 /// with its directory, if missing). Returns whether the file changed.
 #[cfg(unix)]
 fn install_into(path: &std::path::Path, events: &[(&str, bool)], agent: &str) -> Result<bool, String> {
+    install_json(path, |settings| merge_hooks(settings, events, agent))
+}
+
+/// Read the JSON object at `path` (or `{}` if missing), apply `merge`, and
+/// write it back atomically if it changed (directory created as needed).
+#[cfg(unix)]
+fn install_json(
+    path: &std::path::Path,
+    merge: impl FnOnce(&mut serde_json::Value) -> Result<bool, String>,
+) -> Result<bool, String> {
     let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
     let (mut settings, read_at): (serde_json::Value, _) = if path.exists() {
         let read_at = fs::metadata(path).and_then(|m| m.modified()).ok();
@@ -211,7 +340,7 @@ fn install_into(path: &std::path::Path, events: &[(&str, bool)], agent: &str) ->
         return Err(format!("{} is not an object", name));
     }
 
-    let changed = merge_hooks(&mut settings, events, agent)?;
+    let changed = merge(&mut settings)?;
     if changed {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
@@ -363,6 +492,73 @@ fn merge_hooks(
     Ok(changed)
 }
 
+/// Cursor-style `hooks.json`: `{"version": 1, "hooks": {event: [{"command", ...}]}}`
+/// with hook objects directly in each event's array. Same rules as
+/// [`merge_hooks`]: add missing, update our outdated commands, keep others,
+/// refuse malformed shapes.
+#[cfg(unix)]
+fn merge_flat_hooks(
+    settings: &mut serde_json::Value,
+    events: &[&str],
+    agent: &str,
+) -> Result<bool, String> {
+    match settings.get("hooks") {
+        None => {}
+        Some(h) if h.is_object() => {}
+        Some(_) => return Err("hooks.json: \"hooks\" is not an object".to_string()),
+    }
+    if let Some(hooks) = settings.get("hooks").and_then(|h| h.as_object()) {
+        for event in events {
+            if hooks.get(*event).is_some_and(|v| !v.is_array()) {
+                return Err(format!("hooks.json: hooks.{} is not an array", event));
+            }
+        }
+    }
+
+    let mut changed = false;
+    if settings.get("version").is_none() {
+        settings["version"] = serde_json::json!(1);
+        changed = true;
+    }
+    if settings.get("hooks").is_none() {
+        settings["hooks"] = serde_json::json!({});
+        changed = true;
+    }
+    let hooks = settings["hooks"].as_object_mut().expect("hooks is an object");
+    let command = agent_command(agent);
+    for event in events {
+        let entries = hooks
+            .entry(*event)
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("validated above");
+        let mut found = false;
+        for entry in entries.iter_mut().filter(|e| is_our_command(e)) {
+            found = true;
+            if entry["command"] != command.as_str() {
+                entry["command"] = serde_json::json!(command);
+                changed = true;
+            }
+        }
+        if !found {
+            entries.push(serde_json::json!({ "command": command }));
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
+
+#[cfg(unix)]
+fn flat_hooks_complete(settings: &serde_json::Value, events: &[&str], agent: &str) -> bool {
+    let command = agent_command(agent);
+    events.iter().all(|event| {
+        settings["hooks"][*event].as_array().is_some_and(|entries| {
+            let ours: Vec<_> = entries.iter().filter(|e| is_our_command(e)).collect();
+            !ours.is_empty() && ours.iter().all(|e| e["command"] == command.as_str())
+        })
+    })
+}
+
 /// Every event in `events` has a Sessonix entry, none with a matcher.
 #[cfg(unix)]
 fn hooks_complete(settings: &serde_json::Value, events: &[(&str, bool)], agent: &str) -> bool {
@@ -396,21 +592,31 @@ fn is_installed(settings: &serde_json::Value) -> bool {
         })
 }
 
-/// Replace the script only when its content differs, via temp file + rename:
-/// a hook of another session may be executing it right now, and bash reads
-/// scripts incrementally. Returns whether it was written.
+/// Replace the file only when its content differs, via temp file + rename:
+/// a hook of another session may be executing the script right now, and bash
+/// reads scripts incrementally. Returns whether it was written.
 #[cfg(unix)]
 fn write_script_if_changed(path: &std::path::Path, content: &str) -> Result<bool, String> {
     if fs::read_to_string(path).is_ok_and(|current| current == content) {
         return Ok(false);
     }
-    let tmp = path.with_extension(format!("sh.{}.tmp", std::process::id()));
-    fs::write(&tmp, content).map_err(|e| format!("Failed to write hook-handler.sh: {}", e))?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!("{}.{}.tmp", name, std::process::id()));
+    fs::write(&tmp, content).map_err(|e| format!("Failed to write {}: {}", name, e))?;
     fs::rename(&tmp, path).map_err(|e| {
         let _ = fs::remove_file(&tmp);
-        format!("Failed to write hook-handler.sh: {}", e)
+        format!("Failed to write {}: {}", name, e)
     })?;
     Ok(true)
+}
+
+/// [`write_script_if_changed`], creating the parent directory first.
+#[cfg(unix)]
+fn install_file(path: &std::path::Path, content: &str) -> Result<bool, String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+    }
+    write_script_if_changed(path, content)
 }
 
 /// Install the hook handler script to ~/.sessonix/
@@ -438,6 +644,26 @@ fn install_handler_script() -> Result<(), String> {
         .map_err(|e| format!("Failed to create hooks dir: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn gemini_settings_path() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".gemini").join("settings.json"))
+}
+
+#[cfg(unix)]
+fn cursor_hooks_path() -> Option<PathBuf> {
+    Some(dirs::home_dir()?.join(".cursor").join("hooks.json"))
+}
+
+/// `$XDG_CONFIG_HOME/opencode/plugins/sessonix-status.js`, defaulting to `~/.config`.
+#[cfg(unix)]
+fn opencode_plugin_path() -> Option<PathBuf> {
+    let config = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => dirs::home_dir()?.join(".config"),
+    };
+    Some(config.join("opencode").join("plugins").join("sessonix-status.js"))
 }
 
 /// `$CODEX_HOME/hooks.json`, defaulting to `~/.codex/hooks.json`.
@@ -643,6 +869,69 @@ mod tests {
     fn claude_prints_nothing() {
         let (out, _) = run_handler_io("claude", Some(("42", "claude")), None, ev("Stop"));
         assert_eq!(out, "");
+    }
+
+    #[test]
+    fn gemini_merge_into_empty_is_sync() {
+        let mut settings = serde_json::json!({"general": {"enableNotifications": true}});
+        assert!(merge_hooks(&mut settings, GEMINI_HOOK_EVENTS, "gemini").unwrap());
+        for (event, _) in GEMINI_HOOK_EVENTS {
+            let ours = sessonix_entries(&settings, event);
+            assert_eq!(ours.len(), 1, "{event}");
+            assert_eq!(ours[0]["hooks"][0]["command"], "bash ~/.sessonix/hook-handler.sh gemini");
+            assert_eq!(ours[0]["hooks"][0].get("async"), None);
+        }
+        assert_eq!(settings["general"]["enableNotifications"], true);
+        assert!(hooks_complete(&settings, GEMINI_HOOK_EVENTS, "gemini"));
+    }
+
+    #[test]
+    fn cursor_never_registers_permission_hooks() {
+        for forbidden in ["preToolUse", "beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "subagentStart"] {
+            assert!(!CURSOR_HOOK_EVENTS.contains(&forbidden), "{forbidden}");
+        }
+    }
+
+    #[test]
+    fn cursor_merge_into_empty() {
+        let mut hooks = serde_json::json!({});
+        assert!(merge_flat_hooks(&mut hooks, CURSOR_HOOK_EVENTS, "cursor").unwrap());
+        assert_eq!(hooks["version"], 1);
+        for event in CURSOR_HOOK_EVENTS {
+            let entries = hooks["hooks"][*event].as_array().unwrap();
+            assert_eq!(entries, &vec![serde_json::json!({"command": "bash ~/.sessonix/hook-handler.sh cursor"})], "{event}");
+        }
+        assert!(flat_hooks_complete(&hooks, CURSOR_HOOK_EVENTS, "cursor"));
+        assert!(!merge_flat_hooks(&mut hooks, CURSOR_HOOK_EVENTS, "cursor").unwrap());
+    }
+
+    #[test]
+    fn cursor_merge_keeps_user_hooks() {
+        let mut hooks = serde_json::json!({
+            "version": 1,
+            "hooks": {"stop": [{"command": "./audit.sh", "loop_limit": 10}], "preToolUse": [{"command": "./guard.sh"}]}
+        });
+        merge_flat_hooks(&mut hooks, CURSOR_HOOK_EVENTS, "cursor").unwrap();
+        let stop = hooks["hooks"]["stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0], serde_json::json!({"command": "./audit.sh", "loop_limit": 10}));
+        assert_eq!(hooks["hooks"]["preToolUse"], serde_json::json!([{"command": "./guard.sh"}]));
+    }
+
+    #[test]
+    fn cursor_merge_rejects_malformed() {
+        let mut hooks = serde_json::json!({"hooks": {"stop": "nope"}});
+        assert!(merge_flat_hooks(&mut hooks, CURSOR_HOOK_EVENTS, "cursor").is_err());
+        assert_eq!(hooks["hooks"]["stop"], "nope");
+    }
+
+    #[test]
+    fn opencode_plugin_installed_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode/plugins/sessonix-status.js");
+        assert!(install_file(&path, OPENCODE_PLUGIN).unwrap());
+        assert!(!install_file(&path, OPENCODE_PLUGIN).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), OPENCODE_PLUGIN);
     }
 
     #[test]
