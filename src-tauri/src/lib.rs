@@ -1273,6 +1273,14 @@ pub fn run() {
         .manage(SessionManager::new(db))
         .manage(AdapterRegistry::new())
         .setup(move |app| {
+            // Bring hooks installed by an older Sessonix up to date (new events,
+            // new handler script). Never installs from scratch.
+            match hooks::upgrade_if_installed() {
+                Ok(true) => log::info!("Upgraded Claude Code hooks"),
+                Ok(false) => {}
+                Err(e) => log::warn!("Failed to upgrade Claude Code hooks: {}", e),
+            }
+
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
             use tauri::menu::*;
 

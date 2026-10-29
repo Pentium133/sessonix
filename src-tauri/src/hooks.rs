@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 #[cfg(unix)]
 const HOOK_COMMAND: &str = "bash ~/.sessonix/hook-handler.sh";
+#[cfg(unix)]
+const HANDLER_SCRIPT: &str = include_str!("../resources/hook-handler.sh");
 
 /// Hook status file written by hook-handler.sh. Fields are deserialized from
 /// JSON produced by an external process; some are retained for future
@@ -56,8 +58,30 @@ fn parse_hook_status(content: &str, now: i64) -> Option<HookStatus> {
     Some(status)
 }
 
-/// Install Sessonix hooks into Claude's settings.json.
-/// Preserves existing hooks from other tools.
+/// Claude Code events Sessonix listens to, with whether the hook runs async.
+/// PreCompact stays sync so the status is written before compaction starts.
+#[cfg(unix)]
+const HOOK_EVENTS: &[(&str, bool)] = &[
+    ("SessionStart", true),
+    ("UserPromptSubmit", true),
+    ("PreToolUse", true),
+    ("PostToolUse", true),
+    ("PostToolUseFailure", true),
+    ("PermissionDenied", true),
+    ("SubagentStart", true),
+    ("PreCompact", false),
+    ("Stop", true),
+    ("StopFailure", true),
+    ("PermissionRequest", true),
+    // No matcher: the handler filters by notification_type.
+    ("Notification", true),
+    ("SessionEnd", true),
+];
+
+/// Install Sessonix hooks into Claude's settings.json, adding any missing
+/// events and upgrading entries written by older versions. Preserves hooks
+/// from other tools. Always rewrites the handler script.
+/// Returns whether settings.json changed.
 ///
 /// Windows: no-op. The handler is a bash script and Windows Claude CLI has no
 /// guaranteed bash available. Claude status detection falls back to JSONL
@@ -72,7 +96,6 @@ pub fn install_hooks() -> Result<bool, String> {
     let settings_path = claude_settings_path()
         .ok_or_else(|| "Cannot find Claude config directory".to_string())?;
 
-    // Read existing settings or create new
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = fs::read_to_string(&settings_path)
             .map_err(|e| format!("Failed to read settings.json: {}", e))?;
@@ -81,108 +104,42 @@ pub fn install_hooks() -> Result<bool, String> {
     } else {
         serde_json::json!({})
     };
-
-    // Check if already installed
-    if is_installed(&settings) {
-        return Ok(false);
+    if !settings.is_object() {
+        return Err("settings.json is not an object".to_string());
     }
 
-    // Ensure hooks object exists
-    if settings.get("hooks").is_none() {
-        settings["hooks"] = serde_json::json!({});
+    let changed = merge_hooks(&mut settings);
+    if changed {
+        let output = serde_json::to_string_pretty(&settings)
+            .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        fs::write(&settings_path, output)
+            .map_err(|e| format!("Failed to write settings.json: {}", e))?;
     }
 
-    let hooks = settings["hooks"].as_object_mut()
-        .ok_or_else(|| "hooks is not an object".to_string())?;
-
-    // Events to hook into
-    let events = [
-        ("SessionStart", true),
-        ("UserPromptSubmit", true),
-        ("Stop", true),
-        ("PermissionRequest", true),
-        ("SessionEnd", true),
-        ("PreCompact", false), // sync for PreCompact
-    ];
-
-    for (event, is_async) in events {
-        let hook_entry = if is_async {
-            serde_json::json!({
-                "type": "command",
-                "command": HOOK_COMMAND,
-                "async": true
-            })
-        } else {
-            serde_json::json!({
-                "type": "command",
-                "command": HOOK_COMMAND
-            })
-        };
-
-        let hook_config = serde_json::json!({
-            "hooks": [hook_entry]
-        });
-
-        // Append to existing array or create new
-        if let Some(arr) = hooks.get_mut(event).and_then(|v| v.as_array_mut()) {
-            // Check if our hook is already there
-            let already = arr.iter().any(|entry| {
-                entry.get("hooks")
-                    .and_then(|h| h.as_array())
-                    .is_some_and(|hooks_arr| {
-                        hooks_arr.iter().any(|h| {
-                            h.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND)
-                        })
-                    })
-            });
-            if !already {
-                arr.push(hook_config);
-            }
-        } else {
-            hooks.insert(event.to_string(), serde_json::json!([hook_config]));
-        }
-    }
-
-    // Also add Notification hook with matcher
-    let notification_hook = serde_json::json!({
-        "matcher": "permission_prompt|elicitation_dialog",
-        "hooks": [{
-            "type": "command",
-            "command": HOOK_COMMAND,
-            "async": true
-        }]
-    });
-
-    if let Some(arr) = hooks.get_mut("Notification").and_then(|v| v.as_array_mut()) {
-        let already = arr.iter().any(|entry| {
-            entry.get("hooks")
-                .and_then(|h| h.as_array())
-                .is_some_and(|hooks_arr| {
-                    hooks_arr.iter().any(|h| {
-                        h.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND)
-                    })
-                })
-        });
-        if !already {
-            arr.push(notification_hook);
-        }
-    } else {
-        hooks.insert("Notification".to_string(), serde_json::json!([notification_hook]));
-    }
-
-    // Write back
-    let output = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    fs::write(&settings_path, output)
-        .map_err(|e| format!("Failed to write settings.json: {}", e))?;
-
-    // Ensure hook handler script is installed
     install_handler_script()?;
-
-    Ok(true)
+    Ok(changed)
 }
 
-/// Check if Sessonix hooks are already installed.
+/// Upgrade an existing install (settings or handler script out of date).
+/// Never installs from scratch: that needs the user's consent.
+/// Returns whether anything was upgraded.
+#[cfg(windows)]
+pub fn upgrade_if_installed() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub fn upgrade_if_installed() -> Result<bool, String> {
+    let Some(settings) = read_claude_settings() else {
+        return Ok(false);
+    };
+    if !is_installed(&settings) || (hooks_complete(&settings) && handler_script_current()) {
+        return Ok(false);
+    }
+    install_hooks().map(|_| true)
+}
+
+/// Check if Sessonix hooks are installed and up to date.
 ///
 /// Windows: always `false` — `install_hooks` is a no-op there.
 #[cfg(windows)]
@@ -192,42 +149,95 @@ pub fn check_installed() -> bool {
 
 #[cfg(unix)]
 pub fn check_installed() -> bool {
-    let settings_path = match claude_settings_path() {
-        Some(p) => p,
-        None => return false,
-    };
-
-    let content = match fs::read_to_string(&settings_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let settings: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-
-    is_installed(&settings)
+    read_claude_settings().is_some_and(|s| hooks_complete(&s)) && handler_script_current()
 }
 
 #[cfg(unix)]
+fn read_claude_settings() -> Option<serde_json::Value> {
+    let content = fs::read_to_string(claude_settings_path()?).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+#[cfg(unix)]
+fn handler_script_current() -> bool {
+    fs::read_to_string(sessonix_dir().join("hook-handler.sh"))
+        .is_ok_and(|on_disk| on_disk == HANDLER_SCRIPT)
+}
+
+/// A hook-config entry (`{"matcher"?, "hooks": [...]}`) that runs our command.
+#[cfg(unix)]
+fn entry_is_ours(entry: &serde_json::Value) -> bool {
+    entry
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .is_some_and(|hooks| {
+            hooks
+                .iter()
+                .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND))
+        })
+}
+
+/// Add a Sessonix entry for every event in [`HOOK_EVENTS`] that lacks one and
+/// drop the matcher older versions set on the Notification entry. Returns
+/// whether `settings` changed.
+#[cfg(unix)]
+fn merge_hooks(settings: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    if !settings.get("hooks").is_some_and(|h| h.is_object()) {
+        settings["hooks"] = serde_json::json!({});
+        changed = true;
+    }
+    let hooks = settings["hooks"].as_object_mut().expect("hooks is an object");
+
+    for &(event, is_async) in HOOK_EVENTS {
+        let entries = hooks
+            .entry(event)
+            .or_insert_with(|| serde_json::json!([]));
+        if !entries.is_array() {
+            *entries = serde_json::json!([]);
+        }
+        let entries = entries.as_array_mut().expect("array");
+
+        let mut found = false;
+        for entry in entries.iter_mut().filter(|e| entry_is_ours(e)) {
+            found = true;
+            if let Some(obj) = entry.as_object_mut() {
+                changed |= obj.remove("matcher").is_some();
+            }
+        }
+        if !found {
+            let mut hook = serde_json::json!({ "type": "command", "command": HOOK_COMMAND });
+            if is_async {
+                hook["async"] = serde_json::json!(true);
+            }
+            entries.push(serde_json::json!({ "hooks": [hook] }));
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Every event in [`HOOK_EVENTS`] has a Sessonix entry, none with a matcher.
+#[cfg(unix)]
+fn hooks_complete(settings: &serde_json::Value) -> bool {
+    HOOK_EVENTS.iter().all(|(event, _)| {
+        settings["hooks"][*event].as_array().is_some_and(|entries| {
+            let ours: Vec<_> = entries.iter().filter(|e| entry_is_ours(e)).collect();
+            !ours.is_empty() && ours.iter().all(|e| e.get("matcher").is_none())
+        })
+    })
+}
+
+/// Any Sessonix hook present (the user installed hooks at some point).
+#[cfg(unix)]
 fn is_installed(settings: &serde_json::Value) -> bool {
-    settings.get("hooks")
+    settings
+        .get("hooks")
         .and_then(|h| h.as_object())
         .is_some_and(|hooks| {
-            hooks.values().any(|arr| {
-                arr.as_array().is_some_and(|entries| {
-                    entries.iter().any(|entry| {
-                        entry.get("hooks")
-                            .and_then(|h| h.as_array())
-                            .is_some_and(|hooks_arr| {
-                                hooks_arr.iter().any(|h| {
-                                    h.get("command").and_then(|c| c.as_str()) == Some(HOOK_COMMAND)
-                                })
-                            })
-                    })
-                })
-            })
+            hooks
+                .values()
+                .any(|arr| arr.as_array().is_some_and(|e| e.iter().any(entry_is_ours)))
         })
 }
 
@@ -241,8 +251,7 @@ fn install_handler_script() -> Result<(), String> {
     let script_path = dir.join("hook-handler.sh");
 
     // Always overwrite with latest version
-    let script = include_str!("../resources/hook-handler.sh");
-    fs::write(&script_path, script)
+    fs::write(&script_path, HANDLER_SCRIPT)
         .map_err(|e| format!("Failed to write hook-handler.sh: {}", e))?;
 
     // Make executable
@@ -390,6 +399,84 @@ mod tests {
     #[test]
     fn unknown_status_uses_running_age() {
         assert!(parse_hook_status(&status_json("whatever", 1000), 1601).is_none());
+    }
+
+    fn ours(is_async: bool) -> serde_json::Value {
+        if is_async {
+            serde_json::json!({"type": "command", "command": HOOK_COMMAND, "async": true})
+        } else {
+            serde_json::json!({"type": "command", "command": HOOK_COMMAND})
+        }
+    }
+
+    /// Layout written by the previous installer, plus another tool's hook.
+    fn old_install() -> serde_json::Value {
+        serde_json::json!({
+            "model": "opus",
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [ours(true)]},
+                    {"hooks": [{"type": "command", "command": "python3 obsidian/load_vault.py"}]}
+                ],
+                "UserPromptSubmit": [{"hooks": [ours(true)]}],
+                "Stop": [{"hooks": [ours(true)]}],
+                "PermissionRequest": [{"hooks": [ours(true)]}],
+                "SessionEnd": [{"hooks": [ours(true)]}],
+                "PreCompact": [{"hooks": [ours(false)]}],
+                "Notification": [{"matcher": "permission_prompt|elicitation_dialog", "hooks": [ours(true)]}]
+            }
+        })
+    }
+
+    fn sessonix_entries<'a>(settings: &'a serde_json::Value, event: &str) -> Vec<&'a serde_json::Value> {
+        settings["hooks"][event]
+            .as_array()
+            .map(|a| a.iter().filter(|e| entry_is_ours(e)).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn merge_into_empty_adds_all_events() {
+        let mut settings = serde_json::json!({});
+        assert!(merge_hooks(&mut settings));
+        for (event, _) in HOOK_EVENTS {
+            assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
+        }
+        assert!(hooks_complete(&settings));
+    }
+
+    #[test]
+    fn upgrade_old_install() {
+        let mut settings = old_install();
+        assert!(!hooks_complete(&settings));
+        assert!(merge_hooks(&mut settings));
+        for (event, _) in HOOK_EVENTS {
+            assert_eq!(sessonix_entries(&settings, event).len(), 1, "{event}");
+        }
+        let notif = sessonix_entries(&settings, "Notification")[0];
+        assert!(notif.get("matcher").is_none());
+        assert_eq!(settings["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
+        assert_eq!(settings["model"], "opus");
+        assert_eq!(sessonix_entries(&settings, "PreCompact")[0]["hooks"][0].get("async"), None);
+        assert_eq!(sessonix_entries(&settings, "PreToolUse")[0]["hooks"][0]["async"], true);
+        assert!(hooks_complete(&settings));
+    }
+
+    #[test]
+    fn merge_is_idempotent() {
+        let mut settings = old_install();
+        merge_hooks(&mut settings);
+        let snapshot = settings.clone();
+        assert!(!merge_hooks(&mut settings));
+        assert_eq!(settings, snapshot);
+    }
+
+    #[test]
+    fn hooks_complete_false_when_event_missing() {
+        let mut settings = serde_json::json!({});
+        merge_hooks(&mut settings);
+        settings["hooks"].as_object_mut().unwrap().remove("StopFailure");
+        assert!(!hooks_complete(&settings));
     }
 
     #[test]
