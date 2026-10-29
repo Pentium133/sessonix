@@ -6,6 +6,7 @@ mod git_manager;
 mod hooks;
 mod jsonl;
 mod pty_manager;
+mod pty_output;
 mod ring_buffer;
 mod session_manager;
 mod types;
