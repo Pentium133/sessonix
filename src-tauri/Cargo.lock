@@ -3963,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "sessonix"
-version = "0.16.2"
+version = "0.16.3"
 dependencies = [
  "dirs 5.0.1",
  "dunce",
