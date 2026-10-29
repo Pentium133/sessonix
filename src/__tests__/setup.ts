@@ -3,6 +3,12 @@ import { vi } from "vitest";
 // Mock @tauri-apps/api/core
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  Channel: class {
+    onmessage: (message: unknown) => void;
+    constructor(onmessage?: (message: unknown) => void) {
+      this.onmessage = onmessage ?? (() => {});
+    }
+  },
 }));
 
 // Mock @tauri-apps/api/event

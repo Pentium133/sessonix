@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type Channel } from "@tauri-apps/api/core";
 import type { AgentStatus, CreateSessionRequest, Task } from "./types";
 
 export async function createSession(
@@ -32,6 +32,12 @@ export async function detachSession(id: number): Promise<void> {
 
 export async function attachSession(id: number): Promise<number[]> {
   return invoke<number[]>("attach_session", { id });
+}
+
+export async function subscribePtyOutput(
+  channel: Channel<ArrayBuffer>
+): Promise<void> {
+  return invoke<void>("subscribe_pty_output", { onOutput: channel });
 }
 
 export async function getSessionCount(): Promise<number> {
