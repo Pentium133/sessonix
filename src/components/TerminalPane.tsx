@@ -2,11 +2,11 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { writeToSession, resizeSession, saveScrollback, getScrollback } from "../lib/api";
 import { useSettingsStore } from "../store/settingsStore";
 import { getThemeById, resolveSystemTheme } from "../lib/themes";
+import { loadUnicodeWidths, loadWebglRenderer } from "../lib/terminalRenderer";
 import {
   MAX_LIVE_TERMINALS,
   type TerminalInstance,
@@ -27,20 +27,6 @@ function getTerminalTheme() {
   const themeId = attr || resolveSystemTheme();
   const def = getThemeById(themeId);
   return def?.terminal ?? getThemeById("sessonix-dark")!.terminal;
-}
-
-/**
- * GPU renderer; must be loaded after terminal.open(). On failure or GL context
- * loss xterm falls back to its DOM renderer once the addon is disposed.
- */
-function loadWebglRenderer(terminal: Terminal) {
-  try {
-    const webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
-    terminal.loadAddon(webgl);
-  } catch (e) {
-    console.warn("WebGL renderer unavailable, using DOM renderer", e);
-  }
 }
 
 const SAVE_INTERVAL_MS = 30_000; // 30 seconds
@@ -117,6 +103,7 @@ export default function TerminalPane({
       const serializeAddon = new SerializeAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(serializeAddon);
+      loadUnicodeWidths(terminal);
 
       if (!readOnly) {
         terminal.onData((data) => {
