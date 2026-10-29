@@ -190,10 +190,17 @@ impl SessionManager {
         let is_claude = params.agent_type == "claude";
         let is_codex = params.agent_type == "codex";
         let is_opencode = params.agent_type == "opencode";
-        if is_codex {
-            // Status hooks; Codex runs them once the user trusts them (/hooks).
-            if let Err(e) = crate::hooks::install_codex_hooks() {
-                log::warn!("Failed to install Codex hooks: {}", e);
+        // Status hooks (Codex runs them once the user trusts them via /hooks).
+        let install_status_hooks: Option<crate::hooks::HookInstaller> = match params.agent_type {
+            "codex" => Some(crate::hooks::install_codex_hooks),
+            "gemini" => Some(crate::hooks::install_gemini_hooks),
+            "cursor" => Some(crate::hooks::install_cursor_hooks),
+            "opencode" => Some(crate::hooks::install_opencode_plugin),
+            _ => None,
+        };
+        if let Some(install) = install_status_hooks {
+            if let Err(e) = install() {
+                log::warn!("Failed to install {} status hooks: {}", params.agent_type, e);
             }
         }
         let is_resume = params.args.iter().any(|a| a == "--resume");

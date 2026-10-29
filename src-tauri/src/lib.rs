@@ -171,9 +171,10 @@ fn get_session_status(
         }
     }
 
-    // Codex: hook status file when its hooks are installed and trusted;
-    // otherwise terminal patterns below. `Interrupt` covers Esc.
-    if agent_type.as_deref() == Some("codex") {
+    // Codex, Gemini, Cursor (hook handler) and OpenCode (status plugin): hook
+    // status file when installed (and, for Codex, trusted); otherwise terminal
+    // patterns below.
+    if matches!(agent_type.as_deref(), Some("codex" | "gemini" | "cursor" | "opencode")) {
         if let Some(hook) = hooks::read_hook_status(id) {
             return Ok(hook_agent_status(&hook));
         }
@@ -1296,10 +1297,18 @@ pub fn run() {
                 Ok(false) => {}
                 Err(e) => log::warn!("Failed to upgrade Claude Code hooks: {}", e),
             }
-            match hooks::upgrade_codex_if_installed() {
-                Ok(true) => log::info!("Upgraded Codex hooks"),
-                Ok(false) => {}
-                Err(e) => log::warn!("Failed to upgrade Codex hooks: {}", e),
+            let upgrades: [(&str, hooks::HookInstaller); 4] = [
+                ("Codex", hooks::upgrade_codex_if_installed),
+                ("Gemini", hooks::upgrade_gemini_if_installed),
+                ("Cursor", hooks::upgrade_cursor_if_installed),
+                ("OpenCode", hooks::upgrade_opencode_if_installed),
+            ];
+            for (agent, upgrade) in upgrades {
+                match upgrade() {
+                    Ok(true) => log::info!("Upgraded {} status hooks", agent),
+                    Ok(false) => {}
+                    Err(e) => log::warn!("Failed to upgrade {} status hooks: {}", agent, e),
+                }
             }
 
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
