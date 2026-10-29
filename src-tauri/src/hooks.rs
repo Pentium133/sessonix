@@ -661,6 +661,53 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"changed\":true}");
     }
 
+    fn status_now(event: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "event": event, "status": status, "session_id": "s", "pty_id": 42,
+            "ts": now_ms() / 1000, "ts_ms": now_ms()
+        })
+    }
+
+    #[test]
+    fn handler_maps_interrupt_to_idle() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "Interrupt", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn handler_maps_post_compact_to_running() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "PostCompact", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn handler_session_start_does_not_override_running() {
+        let out = run_handler_over(
+            status_now("PreToolUse", "running"),
+            serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}),
+        );
+        assert_eq!(out["status"], "running");
+    }
+
+    #[test]
+    fn handler_session_start_sets_idle_when_not_running() {
+        let out = run_handler_over(
+            status_now("Stop", "idle"),
+            serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s", "source": "startup"}),
+        );
+        assert_eq!(out["status"], "idle");
+        assert_eq!(out["event"], "SessionStart");
+    }
+
+    #[test]
+    fn handler_late_tool_event_does_not_override_fresh_interrupt() {
+        let out = run_handler_over(
+            status_now("Interrupt", "idle"),
+            serde_json::json!({"hook_event_name": "PostToolUse", "session_id": "s"}),
+        );
+        assert_eq!(out["status"], "idle");
+    }
+
     #[test]
     fn test_is_installed_empty() {
         let settings = serde_json::json!({});

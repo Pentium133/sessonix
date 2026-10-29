@@ -26,7 +26,10 @@ try:
         'PermissionDenied': 'running',
         'SubagentStart': 'running',
         'PreCompact': 'running',
+        'PostCompact': 'running',
         'Stop': 'idle',
+        # Codex: the user interrupted the active turn (Claude fires nothing).
+        'Interrupt': 'idle',
         # Fires instead of Stop when the turn ends on an API error.
         'StopFailure': 'error',
         'PermissionRequest': 'waiting_permission',
@@ -51,15 +54,19 @@ try:
     # Hooks run async, so a tool event's handler can finish after the Stop or
     # PermissionRequest that followed it. Don't let such a late heartbeat
     # overwrite a fresh turn end / permission wait.
-    if event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart'):
-        try:
-            with open(path) as f:
-                prev = json.load(f)
-            if (prev.get('event') in ('Stop', 'PermissionRequest')
-                    and now_ms - int(prev.get('ts_ms', 0)) < 2000):
-                sys.exit(0)
-        except (OSError, ValueError):
-            pass
+    # Codex also fires SessionStart for subagents mid-turn: never let it end a
+    # running turn.
+    try:
+        with open(path) as f:
+            prev = json.load(f)
+    except (OSError, ValueError):
+        prev = {}
+    if event == 'SessionStart' and status == 'idle' and prev.get('status') == 'running':
+        sys.exit(0)
+    if (event in ('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'SubagentStart')
+            and prev.get('event') in ('Stop', 'Interrupt', 'PermissionRequest')
+            and now_ms - int(prev.get('ts_ms', 0)) < 2000):
+        sys.exit(0)
     out = {
         'event': event,
         'status': status,
