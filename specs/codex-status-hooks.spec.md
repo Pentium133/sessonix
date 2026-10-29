@@ -42,7 +42,7 @@ Reference (as of 2026-10-29): learn.chatgpt.com/docs/hooks (redirect from develo
 - Same merge rules as Claude: idempotent, key order preserved, other hooks kept, malformed shapes refused, atomic write that refuses if the file changed since read; created if missing.
   `[@test] ../src-tauri/src/hooks.rs`
 - Installed automatically (backend, unix only) when a Codex session is created, and upgraded at app start if Sessonix Codex hooks are already present. Failures are logged, never block session creation. The handler script is the shared one.
-- Sessonix does not touch Codex's trust state and does not pass `--dangerously-bypass-hook-trust`. The user trusts the hooks once via `/hooks` in Codex (again after a handler/definition change, since the hash changes).
+- Sessonix does not touch Codex's trust state and does not pass `--dangerously-bypass-hook-trust`. The user trusts the hooks once via `/hooks` in Codex. Trust is a hash of the hook definition in `hooks.json` (command, async, …), not of the handler script, so handler updates need no re-trust; only a changed definition does (per `version_for_toml` in Codex source; confidence: medium).
 
 ## Known limitations
 
