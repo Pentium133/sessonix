@@ -273,6 +273,75 @@ fn hooks_dir() -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Run the bundled handler with `input` on stdin; return the status file it wrote.
+    fn run_handler(input: serde_json::Value) -> Option<serde_json::Value> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let home = tempfile::tempdir().unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/hook-handler.sh");
+        let mut child = Command::new("bash")
+            .arg(script)
+            .env("HOME", home.path())
+            .env("SESSONIX_PTY_ID", "42")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+        let content = fs::read_to_string(home.path().join(".sessonix/hooks/42.json")).ok()?;
+        Some(serde_json::from_str(&content).unwrap())
+    }
+
+    fn handler_status(input: serde_json::Value) -> Option<String> {
+        run_handler(input).map(|v| v["status"].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn handler_maps_tool_event_to_running() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "PreToolUse", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn handler_maps_stop_failure_to_error() {
+        let out = run_handler(serde_json::json!({
+            "hook_event_name": "StopFailure", "session_id": "s", "error": "rate_limit"
+        }))
+        .unwrap();
+        assert_eq!(out["status"], "error");
+        assert_eq!(out["error"], "rate_limit");
+    }
+
+    #[test]
+    fn handler_maps_permission_notification() {
+        let s = handler_status(serde_json::json!({
+            "hook_event_name": "Notification", "session_id": "s", "notification_type": "permission_prompt"
+        }));
+        assert_eq!(s.as_deref(), Some("waiting_permission"));
+    }
+
+    #[test]
+    fn handler_maps_idle_notification() {
+        let s = handler_status(serde_json::json!({
+            "hook_event_name": "Notification", "session_id": "s", "notification_type": "idle_prompt"
+        }));
+        assert_eq!(s.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn handler_ignores_other_notifications() {
+        let s = handler_status(serde_json::json!({
+            "hook_event_name": "Notification", "session_id": "s", "notification_type": "auth_success"
+        }));
+        assert_eq!(s, None);
+    }
+
+    #[test]
+    fn handler_maps_stop_to_idle() {
+        let s = handler_status(serde_json::json!({"hook_event_name": "Stop", "session_id": "s"}));
+        assert_eq!(s.as_deref(), Some("idle"));
+    }
+
     #[test]
     fn test_is_installed_empty() {
         let settings = serde_json::json!({});
