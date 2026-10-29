@@ -104,10 +104,30 @@ fn get_session_status(
     if agent_type.as_deref() == Some("claude") {
         // 1. Check hook status file (fastest, real-time from Claude events)
         if let Some(hook) = hooks::read_hook_status(id) {
+            // Esc fires no hook event: a "running" hook whose transcript ends
+            // with the interrupt entry is really waiting for input.
+            let interrupted = || {
+                hook.status == "running"
+                    && working_dir
+                        .as_ref()
+                        .zip(agent_session_id.as_ref())
+                        .and_then(|(wd, sid)| jsonl::find_session_file_by_id(wd, sid))
+                        .is_some_and(|p| jsonl::ends_with_interrupt(&p))
+            };
             let (state_val, status_line) = match hook.status.as_str() {
+                "running" if interrupted() => {
+                    (types::SessionStatus::Idle, "Waiting for input".to_string())
+                }
                 "running" => (types::SessionStatus::Running, "Working...".to_string()),
                 "idle" => (types::SessionStatus::Idle, "Waiting for input".to_string()),
                 "waiting_permission" => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
+                "error" => (
+                    types::SessionStatus::Error,
+                    match hook.error.as_deref() {
+                        Some(e) if !e.is_empty() => format!("API error: {}", e),
+                        _ => "API error".to_string(),
+                    },
+                ),
                 "exited" => (types::SessionStatus::Running, "Session ending...".to_string()),
                 _ => (types::SessionStatus::Running, String::new()),
             };
@@ -126,7 +146,6 @@ fn get_session_status(
                 let (state_val, status_line) = match status {
                     jsonl::ClaudeStatus::Active => (types::SessionStatus::Running, "Working...".to_string()),
                     jsonl::ClaudeStatus::Idle => (types::SessionStatus::Idle, "Waiting for input".to_string()),
-                    jsonl::ClaudeStatus::WaitingPermission => (types::SessionStatus::Idle, "Waiting for permission".to_string()),
                     jsonl::ClaudeStatus::Error(msg) => (types::SessionStatus::Error, msg),
                     jsonl::ClaudeStatus::Unknown => {
                         // Fall back to terminal-based detection
@@ -1254,6 +1273,14 @@ pub fn run() {
         .manage(SessionManager::new(db))
         .manage(AdapterRegistry::new())
         .setup(move |app| {
+            // Bring hooks installed by an older Sessonix up to date (new events,
+            // new handler script). Never installs from scratch.
+            match hooks::upgrade_if_installed() {
+                Ok(true) => log::info!("Upgraded Claude Code hooks"),
+                Ok(false) => {}
+                Err(e) => log::warn!("Failed to upgrade Claude Code hooks: {}", e),
+            }
+
             // Custom macOS app menu: replace default Quit with our own that emits confirm-exit
             use tauri::menu::*;
 

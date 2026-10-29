@@ -68,7 +68,6 @@ pub fn find_session_file_by_id(working_dir: &str, session_id: &str) -> Option<Pa
 pub enum ClaudeStatus {
     Active,             // processing tool results
     Idle,               // finished, waiting for input
-    WaitingPermission,  // tool_use, waiting for approval
     Error(String),      // system error
     Unknown,
 }
@@ -131,15 +130,21 @@ pub fn detect_status(path: &PathBuf) -> ClaudeStatus {
             if let Some(ref msg) = entry.message {
                 match msg.stop_reason.as_deref() {
                     Some("end_turn") => return ClaudeStatus::Idle,
-                    Some("tool_use") => return ClaudeStatus::WaitingPermission,
+                    // A tool is executing (or awaiting approval — only hooks
+                    // can tell those apart; this fallback assumes executing).
+                    Some("tool_use") => return ClaudeStatus::Active,
                     _ => {}
                 }
             }
         }
 
-        // User message with tool_result → agent is active (processing)
+        // User message with tool_result → agent is active (processing);
+        // user interrupt → turn cancelled, waiting for input
         if entry_type == "user" {
             if let Some(ref msg) = entry.message {
+                if is_interrupt(msg) {
+                    return ClaudeStatus::Idle;
+                }
                 if has_tool_result(msg) {
                     return ClaudeStatus::Active;
                 }
@@ -148,6 +153,37 @@ pub fn detect_status(path: &PathBuf) -> ClaudeStatus {
     }
 
     ClaudeStatus::Unknown
+}
+
+/// Claude Code writes this user entry when the user presses Esc; no hook
+/// event fires for an interrupt.
+const INTERRUPT_MARKER: &str = "[Request interrupted by user";
+
+fn is_interrupt(msg: &MessageBody) -> bool {
+    let starts = |t: &str| t.starts_with(INTERRUPT_MARKER);
+    match msg.content.as_ref() {
+        Some(serde_json::Value::String(t)) => starts(t),
+        Some(serde_json::Value::Array(blocks)) => blocks.iter().any(|b| {
+            b.get("type").and_then(|t| t.as_str()) == Some("text")
+                && b.get("text").and_then(|t| t.as_str()).is_some_and(starts)
+        }),
+        _ => false,
+    }
+}
+
+/// True when the last user/assistant entry in the transcript tail is a user
+/// interrupt, i.e. the turn was cancelled and nothing has happened since.
+pub fn ends_with_interrupt(path: &PathBuf) -> bool {
+    let Some((tail, truncated)) = read_tail(path, 8192) else {
+        return false;
+    };
+    parse_tail_entries(&tail, truncated)
+        .iter()
+        .rev()
+        .find(|e| matches!(e.entry_type.as_deref(), Some("user" | "assistant")))
+        .is_some_and(|e| {
+            e.entry_type.as_deref() == Some("user") && e.message.as_ref().is_some_and(is_interrupt)
+        })
 }
 
 fn has_tool_result(msg: &MessageBody) -> bool {
@@ -377,13 +413,13 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_status_waiting_permission() {
+    fn test_detect_status_tool_use_is_active() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.jsonl");
         let mut f = fs::File::create(&path).unwrap();
         writeln!(f, r#"{{"type":"assistant","message":{{"role":"assistant","stop_reason":"tool_use","content":[{{"type":"tool_use","id":"t1","name":"Edit"}}],"usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#).unwrap();
 
-        assert_eq!(detect_status(&path), ClaudeStatus::WaitingPermission);
+        assert_eq!(detect_status(&path), ClaudeStatus::Active);
     }
 
     #[test]
@@ -395,6 +431,42 @@ mod tests {
         writeln!(f, r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"ok"}}]}}}}"#).unwrap();
 
         assert_eq!(detect_status(&path), ClaudeStatus::Active);
+    }
+
+    const TOOL_USE: &str = r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}"#;
+    const INTERRUPT: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+    const INTERRUPT_TOOL: &str = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+    const PROMPT: &str = r#"{"type":"user","message":{"role":"user","content":"next task please"}}"#;
+    const SNAPSHOT: &str = r#"{"type":"file-history-snapshot"}"#;
+
+    fn jsonl(lines: &[&str]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        let mut f = fs::File::create(&path).unwrap();
+        for l in lines {
+            writeln!(f, "{}", l).unwrap();
+        }
+        (dir, path)
+    }
+
+    #[test]
+    fn test_detect_status_interrupt_is_idle() {
+        for marker in [INTERRUPT, INTERRUPT_TOOL] {
+            let (_d, path) = jsonl(&[TOOL_USE, marker]);
+            assert_eq!(detect_status(&path), ClaudeStatus::Idle);
+        }
+    }
+
+    #[test]
+    fn ends_with_interrupt_true() {
+        let (_d, path) = jsonl(&[TOOL_USE, INTERRUPT_TOOL, SNAPSHOT]);
+        assert!(ends_with_interrupt(&path));
+    }
+
+    #[test]
+    fn interrupt_then_new_prompt_not_interrupted() {
+        let (_d, path) = jsonl(&[TOOL_USE, INTERRUPT, PROMPT]);
+        assert!(!ends_with_interrupt(&path));
     }
 
     #[test]
