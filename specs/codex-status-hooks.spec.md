@@ -29,6 +29,10 @@ Reference (as of 2026-10-29): learn.chatgpt.com/docs/hooks (redirect from develo
 - `Interrupt` counts as a turn end for the late-heartbeat guard, like `Stop`: a tool event whose handler finishes within 2 s after it does not overwrite it.
   `[@test] ../src-tauri/src/hooks.rs`
 - The handler stays silent on stdout and exits 0 (valid for every Codex event, including `Stop`).
+- Agent scoping: the PTY sets `SESSONIX_AGENT=<agent_type>`; the hook command carries the agent it was installed for; the handler ignores events whose agent differs (e.g. `codex exec` run as a tool inside a Claude session must not touch that session's status).
+  `[@test] ../src-tauri/src/hooks.rs`
+- The `SessionStart`-never-overrides-running rule applies to Codex only.
+  `[@test] ../src-tauri/src/hooks.rs`
 
 ## Status in `get_session_status`
 
@@ -37,7 +41,7 @@ Reference (as of 2026-10-29): learn.chatgpt.com/docs/hooks (redirect from develo
 
 ## Installation
 
-- `~/.codex/hooks.json` gets a Sessonix entry (command `bash ~/.sessonix/hook-handler.sh`, `async: true`, no matcher) for: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`, `PreCompact`, `PostCompact`, `Stop`, `Interrupt`, `SessionEnd`.
+- `~/.codex/hooks.json` gets a Sessonix entry (command `bash ~/.sessonix/hook-handler.sh codex`, no matcher) for: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `SubagentStart`, `PreCompact`, `PostCompact`, `Stop`, `Interrupt` (all `async: true`), and `SessionEnd` (sync — Codex always runs it synchronously and warns when it is marked async).
   `[@test] ../src-tauri/src/hooks.rs`
 - Same merge rules as Claude: idempotent, key order preserved, other hooks kept, malformed shapes refused, atomic write that refuses if the file changed since read; created if missing.
   `[@test] ../src-tauri/src/hooks.rs`
