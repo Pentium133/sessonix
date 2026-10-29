@@ -6,6 +6,7 @@ mod git_manager;
 mod hooks;
 mod jsonl;
 mod pty_manager;
+mod pty_output;
 mod ring_buffer;
 mod session_manager;
 mod types;
@@ -79,9 +80,20 @@ fn detach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<()
 }
 
 #[tauri::command]
-fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<Vec<u8>, String> {
+fn attach_session(state: tauri::State<'_, SessionManager>, id: u32) -> Result<(), String> {
     let session = state.pty.get_session(id).map_err(|e| e.to_string())?;
-    Ok(session.attach_and_drain())
+    session.attach();
+    Ok(())
+}
+
+/// Live PTY output for all sessions arrives on `on_output` as binary frames
+/// (see `pty_output`). A later call replaces the previous channel.
+#[tauri::command]
+fn subscribe_pty_output(
+    state: tauri::State<'_, SessionManager>,
+    on_output: tauri::ipc::Channel<tauri::ipc::InvokeResponseBody>,
+) {
+    state.pty.output_hub().subscribe(std::sync::Arc::new(on_output));
 }
 
 #[tauri::command]
@@ -1393,6 +1405,7 @@ pub fn run() {
             kill_session,
             detach_session,
             attach_session,
+            subscribe_pty_output,
             get_session_count,
             get_session_status,
             get_available_agents,

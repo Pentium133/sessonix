@@ -1,10 +1,10 @@
 use crate::error::AppError;
-use crate::ring_buffer::RingBuffer;
+use crate::pty_output::{OutputBatcher, OutputHub};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter};
@@ -21,8 +21,8 @@ pub struct PtySession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     _reader_handle: Mutex<Option<JoinHandle<()>>>,
-    is_attached: Arc<AtomicBool>,
-    ring_buffer: Arc<Mutex<RingBuffer>>,
+    /// Live delivery, attach flag and ring buffer (see `pty_output`).
+    batcher: Arc<OutputBatcher>,
     last_lines: Arc<Mutex<VecDeque<String>>>,
     /// PID of the spawned shell/agent process (used for foreground process detection)
     pub shell_pid: Option<u32>,
@@ -58,35 +58,27 @@ impl PtySession {
         child
             .kill()
             .map_err(|e| AppError::Pty(format!("kill failed: {}", e)))?;
+        // Only once the kill succeeded: a session that survives a failed kill
+        // must keep delivering output.
+        self.batcher.close(false);
         Ok(())
     }
 
     /// Mark the session as detached and discard any buffered output.
     ///
-    /// The ring buffer only matters to a UI that's about to reattach, so the
-    /// data already streamed via `pty-output` events is dropped here. The
+    /// Pending output is sent first; the ring buffer only matters to a UI
+    /// that's about to reattach, so the already-streamed data is dropped. The
     /// reader thread keeps writing into the (now-empty) buffer until the next
-    /// attach returns it via `attach_and_drain`.
+    /// `attach` replays it. No-op when already detached.
     pub fn detach(&self) {
-        self.is_attached.store(false, Ordering::Relaxed);
-        self.ring_buffer.lock().drain();
+        self.batcher.detach();
     }
 
-    /// Mark the session as attached. If it was detached, return the bytes
-    /// buffered since detach so the caller can replay them into its terminal.
-    ///
-    /// Idempotent: attaching an already-attached session returns an empty
-    /// vector without touching the ring buffer (data has already been
-    /// streamed via `pty-output` events).
-    pub fn attach_and_drain(&self) -> Vec<u8> {
-        let was_detached = !self.is_attached.load(Ordering::Relaxed);
-        let buffered = if was_detached {
-            self.ring_buffer.lock().drain()
-        } else {
-            Vec::new()
-        };
-        self.is_attached.store(true, Ordering::Relaxed);
-        buffered
+    /// Mark the session as attached. If it was detached, the output buffered
+    /// since then is replayed on the output channel ahead of live output.
+    /// Idempotent: attaching an already-attached session sends nothing.
+    pub fn attach(&self) {
+        self.batcher.attach();
     }
 
     /// Clone the ring of the most recent terminal lines (used by status
@@ -120,6 +112,7 @@ impl PtySession {
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<u32, Arc<PtySession>>>>,
     next_id: AtomicU32,
+    output_hub: Arc<OutputHub>,
 }
 
 impl PtyManager {
@@ -127,6 +120,7 @@ impl PtyManager {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU32::new(start_id),
+            output_hub: Arc::new(OutputHub::default()),
         }
     }
 
@@ -231,13 +225,11 @@ impl PtyManager {
             .master
             .take_writer()
             .map_err(|e| AppError::Pty(format!("take writer failed: {}", e)))?;
-        let is_attached = Arc::new(AtomicBool::new(true));
-        let ring_buffer = Arc::new(Mutex::new(RingBuffer::new(RING_BUFFER_SIZE)));
+        let batcher = OutputBatcher::new(id, RING_BUFFER_SIZE, self.output_hub.clone());
         let last_lines: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
 
         // Spawn blocking reader thread
-        let rb = ring_buffer.clone();
-        let attached = is_attached.clone();
+        let out = batcher.clone();
         let ll = last_lines.clone();
         let session_id = id;
 
@@ -250,9 +242,6 @@ impl PtyManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = &buf[..n];
-
-                        // Always write to ring buffer
-                        rb.lock().write(data);
 
                         // Update last_lines for status extraction
                         let text = String::from_utf8_lossy(data);
@@ -280,20 +269,15 @@ impl PtyManager {
                             partial_line.clear();
                         }
 
-                        // Emit to frontend if attached
-                        if attached.load(Ordering::Relaxed) {
-                            let payload = serde_json::json!({
-                                "id": session_id,
-                                "data": data.to_vec(),
-                            });
-                            let _ = app_handle.emit("pty-output", payload);
-                        }
+                        // Ring buffer + coalesced live delivery
+                        out.record(data);
                     }
                     Err(_) => break,
                 }
             }
 
-            // EOF: session exited
+            // EOF: session exited. Deliver the last output before pty-exit.
+            out.close(true);
             let _ = app_handle.emit(
                 "pty-exit",
                 serde_json::json!({ "id": session_id }),
@@ -306,8 +290,7 @@ impl PtyManager {
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
             _reader_handle: Mutex::new(Some(reader_handle)),
-            is_attached,
-            ring_buffer,
+            batcher,
             last_lines,
             shell_pid,
         });
@@ -322,6 +305,11 @@ impl PtyManager {
             .get(&id)
             .cloned()
             .ok_or(AppError::SessionNotFound(id))
+    }
+
+    /// Where every session's output frames go; the frontend subscribes here.
+    pub fn output_hub(&self) -> &Arc<OutputHub> {
+        &self.output_hub
     }
 
     pub fn session_count(&self) -> usize {

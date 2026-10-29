@@ -13,7 +13,7 @@ import {
   reorderSession,
   setSortOrder,
 } from "../lib/api";
-import { writeToTerminal } from "../lib/terminalPool";
+import { ensurePtyOutputSubscribed } from "../lib/ptyOutput";
 import { useProjectStore } from "./projectStore";
 import type { AgentType, GitStatus, Session, SessionStatus } from "../lib/types";
 
@@ -164,6 +164,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   addSession: async (params) => {
+    await ensurePtyOutputSubscribed();
     const { activeSessionId } = get();
     const projectStore = useProjectStore.getState();
 
@@ -327,6 +328,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   switchSession: async (targetId) => {
     const { activeSessionId, sessions } = get();
     if (targetId === activeSessionId) return;
+    await ensurePtyOutputSubscribed();
 
     const targetSession = sessions.find((s) => s.id === targetId);
     const isTargetAlive = targetSession && targetSession.status !== "exited";
@@ -341,10 +343,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // Attach target
     if (isTargetAlive) {
-      const buffered = await attachSession(targetId);
-      if (buffered.length > 0) {
-        writeToTerminal(targetId, new Uint8Array(buffered));
-      }
+      await attachSession(targetId);
     }
 
     // Update active state
