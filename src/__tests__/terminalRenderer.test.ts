@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Terminal } from "@xterm/xterm";
 
 const webglState = vi.hoisted(() => ({
@@ -26,7 +26,12 @@ vi.mock("@xterm/addon-unicode11", () => ({
   }),
 }));
 
-import { loadUnicodeWidths, loadWebglRenderer } from "../lib/terminalRenderer";
+import {
+  loadUnicodeWidths,
+  loadWebglRenderer,
+  onFontsLoaded,
+  preloadTerminalFonts,
+} from "../lib/terminalRenderer";
 
 function stubTerminal() {
   return {
@@ -71,5 +76,53 @@ describe("terminalRenderer", () => {
     const inst = webglState.instances[0];
     inst.contextLoss!();
     expect(inst.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal fonts", () => {
+  let fonts: EventTarget & { load: ReturnType<typeof vi.fn> };
+
+  beforeEach(() => {
+    fonts = Object.assign(new EventTarget(), {
+      load: vi.fn(() => Promise.resolve([])),
+    });
+    Object.defineProperty(document, "fonts", { value: fonts, configurable: true });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "fonts");
+  });
+
+  it("preloads regular and bold faces of the configured font", () => {
+    preloadTerminalFonts("'JetBrains Mono', monospace", 13);
+    expect(fonts.load).toHaveBeenCalledWith("normal 13px 'JetBrains Mono', monospace");
+    expect(fonts.load).toHaveBeenCalledWith("bold 13px 'JetBrains Mono', monospace");
+  });
+
+  it("swallows rejected and throwing loads", async () => {
+    fonts.load.mockImplementationOnce(() => Promise.reject(new Error("network")));
+    fonts.load.mockImplementationOnce(() => {
+      throw new SyntaxError("bad font");
+    });
+    expect(() => preloadTerminalFonts("x", 13)).not.toThrow();
+    await Promise.resolve();
+  });
+
+  it("is a no-op without document.fonts", () => {
+    Reflect.deleteProperty(document, "fonts");
+    expect(() => preloadTerminalFonts("x", 13)).not.toThrow();
+    const off = onFontsLoaded(vi.fn());
+    expect(() => off()).not.toThrow();
+  });
+
+  it("notifies on every loadingdone until unsubscribed", () => {
+    const cb = vi.fn();
+    const off = onFontsLoaded(cb);
+    fonts.dispatchEvent(new Event("loadingdone"));
+    fonts.dispatchEvent(new Event("loadingdone"));
+    expect(cb).toHaveBeenCalledTimes(2);
+    off();
+    fonts.dispatchEvent(new Event("loadingdone"));
+    expect(cb).toHaveBeenCalledTimes(2);
   });
 });

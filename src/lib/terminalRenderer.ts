@@ -24,3 +24,31 @@ export function loadWebglRenderer(terminal: Terminal) {
     console.warn("WebGL renderer unavailable, using DOM renderer", e);
   }
 }
+
+/**
+ * Start loading the regular and bold faces of `fontFamily` now. Faces load
+ * lazily, and a glyph the WebGL renderer draws before its face arrives is
+ * cached in the atlas with a fallback font.
+ */
+export function preloadTerminalFonts(fontFamily: string, fontSize: number) {
+  const fonts = document.fonts;
+  if (!fonts) return;
+  for (const weight of ["normal", "bold"]) {
+    try {
+      fonts.load(`${weight} ${fontSize}px ${fontFamily}`).catch(() => {});
+    } catch {
+      // Invalid font shorthand — nothing to preload.
+    }
+  }
+}
+
+/**
+ * Call `onLoaded` each time the document finishes loading fonts, so terminals
+ * can drop atlas glyphs rasterized with a fallback. Returns an unsubscribe.
+ */
+export function onFontsLoaded(onLoaded: () => void): () => void {
+  const fonts = document.fonts;
+  if (!fonts) return () => {};
+  fonts.addEventListener("loadingdone", onLoaded);
+  return () => fonts.removeEventListener("loadingdone", onLoaded);
+}
