@@ -25,6 +25,10 @@ export function loadWebglRenderer(terminal: Terminal) {
   }
 }
 
+// Web fonts are split into unicode-range subsets that load only when text in
+// their range is requested; canvas drawing doesn't request them.
+const PRELOAD_SAMPLE = "Aa Бб Ёё Ωω";
+
 /**
  * Start loading the regular and bold faces of `fontFamily` now. Faces load
  * lazily, and a glyph the WebGL renderer draws before its face arrives is
@@ -35,7 +39,7 @@ export function preloadTerminalFonts(fontFamily: string, fontSize: number) {
   if (!fonts) return;
   for (const weight of ["normal", "bold"]) {
     try {
-      fonts.load(`${weight} ${fontSize}px ${fontFamily}`).catch(() => {});
+      fonts.load(`${weight} ${fontSize}px ${fontFamily}`, PRELOAD_SAMPLE).catch(() => {});
     } catch {
       // Invalid font shorthand — nothing to preload.
     }

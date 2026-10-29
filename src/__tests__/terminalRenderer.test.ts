@@ -95,8 +95,16 @@ describe("terminal fonts", () => {
 
   it("preloads regular and bold faces of the configured font", () => {
     preloadTerminalFonts("'JetBrains Mono', monospace", 13);
-    expect(fonts.load).toHaveBeenCalledWith("normal 13px 'JetBrains Mono', monospace");
-    expect(fonts.load).toHaveBeenCalledWith("bold 13px 'JetBrains Mono', monospace");
+    expect(fonts.load).toHaveBeenCalledWith("normal 13px 'JetBrains Mono', monospace", expect.any(String));
+    expect(fonts.load).toHaveBeenCalledWith("bold 13px 'JetBrains Mono', monospace", expect.any(String));
+  });
+
+  it("preloads the Cyrillic subset, not just Latin", () => {
+    preloadTerminalFonts("'JetBrains Mono', monospace", 13);
+    for (const [, text] of fonts.load.mock.calls) {
+      expect(text).toMatch(/[A-Za-z]/);
+      expect(text).toMatch(/[А-Яа-яЁё]/);
+    }
   });
 
   it("swallows rejected and throwing loads", async () => {
