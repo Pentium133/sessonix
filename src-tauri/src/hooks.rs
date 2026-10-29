@@ -19,32 +19,40 @@ pub struct HookStatus {
     pub session_id: String,
     pub pty_id: u32,
     pub ts: i64,
+    /// StopFailure error type (`rate_limit`, `overloaded`, ...).
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
+/// How long a `running` status is trusted without a new hook event. Tool
+/// events refresh it during a turn, so only a single tool call running longer
+/// than this (or a missed event) lets it lapse.
+const RUNNING_MAX_AGE_SECS: i64 = 600;
+
 /// Read hook status for a given PTY session.
-/// Staleness rules differ by status:
-/// - "running" / "waiting_permission": stale after 30s (guard against missed Stop events)
-/// - "idle" / "exited": valid for 5 minutes (a stopped session won't restart spontaneously)
 pub fn read_hook_status(pty_id: u32) -> Option<HookStatus> {
     let path = hooks_dir().join(format!("{}.json", pty_id));
     let content = fs::read_to_string(&path).ok()?;
-    let status: HookStatus = serde_json::from_str(&content).ok()?;
-
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let age = now - status.ts;
+    parse_hook_status(&content, now)
+}
 
-    let max_age = match status.status.as_str() {
-        "idle" | "exited" => 300,  // 5 minutes: idle sessions stay idle until new prompt
-        _ => 30,                   // 30s for running/waiting_permission
-    };
-
-    if age > max_age {
+/// Staleness: idle / exited / error / waiting_permission only change on the
+/// next hook event (a permission prompt may wait for hours), so they never
+/// expire. Anything else is treated as running and expires after
+/// [`RUNNING_MAX_AGE_SECS`].
+fn parse_hook_status(content: &str, now: i64) -> Option<HookStatus> {
+    let status: HookStatus = serde_json::from_str(content).ok()?;
+    let settled = matches!(
+        status.status.as_str(),
+        "idle" | "exited" | "error" | "waiting_permission"
+    );
+    if !settled && now - status.ts > RUNNING_MAX_AGE_SECS {
         return None;
     }
-
     Some(status)
 }
 
@@ -340,6 +348,48 @@ mod tests {
     fn handler_maps_stop_to_idle() {
         let s = handler_status(serde_json::json!({"hook_event_name": "Stop", "session_id": "s"}));
         assert_eq!(s.as_deref(), Some("idle"));
+    }
+
+    fn status_json(status: &str, ts: i64) -> String {
+        serde_json::json!({
+            "event": "x", "status": status, "session_id": "s", "pty_id": 1, "ts": ts
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn running_fresh_within_10_min() {
+        assert!(parse_hook_status(&status_json("running", 1000), 1599).is_some());
+    }
+
+    #[test]
+    fn running_stale_after_10_min() {
+        assert!(parse_hook_status(&status_json("running", 1000), 1601).is_none());
+    }
+
+    #[test]
+    fn idle_never_stale() {
+        assert!(parse_hook_status(&status_json("idle", 0), 86_400).is_some());
+    }
+
+    #[test]
+    fn waiting_permission_never_stale() {
+        assert!(parse_hook_status(&status_json("waiting_permission", 0), 86_400).is_some());
+    }
+
+    #[test]
+    fn error_never_stale() {
+        let s = parse_hook_status(
+            r#"{"event":"StopFailure","status":"error","session_id":"s","pty_id":1,"ts":0,"error":"rate_limit"}"#,
+            86_400,
+        )
+        .unwrap();
+        assert_eq!(s.error.as_deref(), Some("rate_limit"));
+    }
+
+    #[test]
+    fn unknown_status_uses_running_age() {
+        assert!(parse_hook_status(&status_json("whatever", 1000), 1601).is_none());
     }
 
     #[test]
