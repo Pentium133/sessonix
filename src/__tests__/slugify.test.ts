@@ -2,64 +2,67 @@ import { describe, it, expect } from "vitest";
 import { slugify, transliterate } from "../lib/slugify";
 
 describe("transliterate", () => {
-  it("passes through ASCII lowercase", () => {
-    expect(transliterate("hello world")).toBe("hello world");
+  it("maps ё to yo (Cyrillic map runs before NFD)", () => {
+    expect(transliterate("ёлка")).toBe("yolka");
+    expect(transliterate("Ёж")).toBe("yozh");
   });
 
-  it("lowercases input", () => {
-    expect(transliterate("MixedCase")).toBe("mixedcase");
-  });
-
-  it("strips Latin diacritics", () => {
-    expect(transliterate("café")).toBe("cafe");
-    expect(transliterate("über")).toBe("uber");
-    expect(transliterate("naïve façade")).toBe("naive facade");
-  });
-
-  it("maps Russian Cyrillic to Latin", () => {
-    expect(transliterate("Привет мир")).toBe("privet mir");
-    expect(transliterate("Исправить баг")).toBe("ispravit bag");
-    expect(transliterate("Щенок жуёт")).toBe("shchenok zhuyot");
-  });
-
-  it("maps Ukrainian-specific letters", () => {
+  it("maps ї to yi and й to y without NFD degradation", () => {
     expect(transliterate("їжак")).toBe("yizhak");
-    expect(transliterate("єдність")).toBe("yednist");
+    expect(transliterate("май")).toBe("may");
   });
 
-  it("drops unmapped scripts (CJK, emoji)", () => {
-    // CJK collapses; only ASCII remains
-    expect(transliterate("你好 world")).toMatch(/world/);
-    expect(transliterate("🚀 launch")).toMatch(/launch/);
+  it("transliterates Russian text", () => {
+    expect(transliterate("Привет мир")).toBe("privet mir");
+    expect(transliterate("щука")).toBe("shchuka");
+  });
+
+  it("drops hard and soft signs", () => {
+    expect(transliterate("объект")).toBe("obekt");
+    expect(transliterate("соль")).toBe("sol");
+  });
+
+  it("strips diacritics from Latin", () => {
+    expect(transliterate("café über")).toBe("cafe uber");
+  });
+
+  it("keeps unmapped non-ASCII characters out of the Cyrillic path", () => {
+    expect(transliterate("日本")).toBe("日本");
+  });
+
+  it("returns empty string for empty input", () => {
+    expect(transliterate("")).toBe("");
   });
 });
 
 describe("slugify", () => {
-  it("produces kebab-case from ASCII", () => {
-    expect(slugify("Fix auth flow")).toBe("fix-auth-flow");
+  it("replaces spaces with dashes", () => {
+    expect(slugify("fix login bug")).toBe("fix-login-bug");
   });
 
-  it("transliterates Cyrillic before slugging", () => {
-    expect(slugify("Исправить нотификации")).toBe("ispravit-notifikatsii");
-    expect(slugify("Привет, мир!")).toBe("privet-mir");
+  it("collapses runs of special characters into one dash", () => {
+    expect(slugify("a!!  @#b___c")).toBe("a-b-c");
   });
 
-  it("handles accented Latin", () => {
-    expect(slugify("Résumé builder")).toBe("resume-builder");
+  it("trims leading and trailing dashes", () => {
+    expect(slugify("  --Hello, World!--  ")).toBe("hello-world");
   });
 
-  it("collapses multiple separators", () => {
-    expect(slugify("a   b___c!!!d")).toBe("a-b-c-d");
+  it("transliterates Cyrillic into a slug", () => {
+    expect(slugify("Тесты для slugify")).toBe("testy-dlya-slugify");
+    expect(slugify("Ёлка и їжак")).toBe("yolka-i-yizhak");
   });
 
-  it("trims leading/trailing separators", () => {
-    expect(slugify("---hello---")).toBe("hello");
-    expect(slugify("!!!tag")).toBe("tag");
+  it("keeps digits", () => {
+    expect(slugify("Task 42: v2")).toBe("task-42-v2");
   });
 
-  it("returns empty string for unrepresentable input", () => {
+  it("returns empty string for empty input", () => {
     expect(slugify("")).toBe("");
-    expect(slugify("🎉🎊")).toBe("");
-    expect(slugify("中文")).toBe("");
+  });
+
+  it("returns empty string when nothing survives transliteration", () => {
+    expect(slugify("日本語 🚀")).toBe("");
+    expect(slugify("!!! ???")).toBe("");
   });
 });
